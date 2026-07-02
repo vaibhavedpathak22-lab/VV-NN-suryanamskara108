@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0F6E56">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Surya Namaskara">
+<title>Surya Namaskara</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#0B1210;--surf:#162019;--surf2:#1E2D24;
+  --acc:#1DB87F;--acc-dim:#0F6E56;--acc-lt:#5DE0A8;
+  --txt:#EEF5F0;--txt2:#9DB8A8;--muted:#5A7065;
+  --bdr:#243328;--warn:#E8A030;--danger:#D85A30;--r:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  overscroll-behavior:none;user-select:none}
+body{display:flex;flex-direction:column;align-items:center;
+  padding:env(safe-area-inset-top,1rem) 1rem env(safe-area-inset-bottom,.75rem);
+  min-height:100dvh;gap:.6rem}
+.app{width:100%;max-width:420px;display:flex;flex-direction:column;gap:.6rem;flex:1}
+
+/* ── header ── */
+header{display:flex;justify-content:space-between;align-items:flex-start}
+.prog-name{font-size:13px;font-weight:700;color:var(--acc-lt);letter-spacing:.01em;
+  max-width:260px;line-height:1.3}
+#day-label{font-size:10px;color:var(--muted);margin-top:1px}
+.gear{background:none;border:none;color:var(--muted);padding:4px;cursor:pointer;
+  display:flex;flex-shrink:0}
+
+/* ── stats 4-up ── */
+.stats{display:flex;gap:6px}
+.stat{flex:1;background:var(--surf);border-radius:12px;padding:8px 4px;
+  text-align:center;border:1px solid var(--bdr)}
+.stat .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.stat .val{font-size:18px;font-weight:700;margin-top:1px}
+.stat.hi{background:var(--acc-dim);border-color:var(--acc)}
+.stat.hi .val{color:var(--acc-lt)}
+
+/* ── time row ── */
+.time-row{display:flex;gap:6px}
+.time-card{flex:1;background:var(--surf);border-radius:11px;
+  padding:7px 10px;border:1px solid var(--bdr);
+  display:flex;align-items:center;gap:8px}
+.time-card svg{flex-shrink:0;color:var(--acc)}
+.time-card .tlbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.time-card .tval{font-size:15px;font-weight:700;color:var(--acc-lt);margin-top:1px}
+
+/* ── ring ── */
+.ring-wrap{position:relative;width:220px;height:220px;margin:.1rem auto;
+  display:flex;align-items:center;justify-content:center}
+.ring-wrap svg{position:absolute;top:0;left:0;transform:rotate(-90deg)}
+.rc{text-align:center;padding:0 .7rem;z-index:1}
+.mantra-roman{font-size:11px;font-weight:600;color:var(--acc-lt);min-height:14px;opacity:.8}
+.mantra-deva{font-size:18px;font-weight:700;color:var(--acc-lt);min-height:24px;
+  letter-spacing:.03em}
+.mantra-mean{font-size:9.5px;color:var(--txt2);margin-top:1px;min-height:12px;font-style:italic}
+.pose-name{font-size:13px;font-weight:600;margin-top:4px;min-height:16px;color:var(--txt2)}
+.pose-breath{font-size:13px;font-weight:700;margin-top:3px;min-height:15px}
+.inhale{color:#5DE0A8}.exhale{color:#E8A030}.hold{color:#9DB8A8}
+.pnum{font-size:9px;color:var(--muted);margin-top:4px}
+.tbar-wrap{margin-top:5px;background:var(--bdr);border-radius:3px;height:3px;
+  width:100px;margin-inline:auto}
+.tbar{height:3px;border-radius:3px;background:var(--acc);width:100%;transition:width .1s linear}
+
+/* ── dots ── */
+.dots{display:flex;gap:4px;align-items:center;flex-wrap:wrap;
+  justify-content:center;min-height:26px}
+.dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr);
+  font-size:8px;font-weight:700;color:var(--muted);
+  display:flex;align-items:center;justify-content:center;transition:all .2s}
+.dot.done{background:var(--acc);border-color:var(--acc);color:#06231A}
+.dot.active{border-color:var(--acc-lt);color:var(--acc-lt);animation:pulse 1s infinite}
+@keyframes pulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(93,224,168,.4)}
+  50%{box-shadow:0 0 0 5px rgba(93,224,168,0)}}
+
+/* ── pace row ── */
+.pace-row{display:flex;align-items:center;gap:8px;justify-content:center}
+.pace-row span{font-size:11px;color:var(--muted)}
+.spd{width:34px;height:34px;border-radius:10px;background:var(--surf);
+  border:1.5px solid var(--bdr);color:var(--txt2);font-size:18px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;line-height:1}
+.spd:active{background:var(--surf2);border-color:var(--acc)}
+.spd-v{font-size:15px;font-weight:700;min-width:72px;text-align:center;
+  color:var(--acc-lt)}
+button{font-family:inherit;border:none;cursor:pointer;transition:transform .1s,opacity .15s}
+button:active{transform:scale(.95)}
+
+/* ── controls ── */
+.ctrl{display:flex;gap:8px;align-items:center}
+.btn-m{flex:1;height:50px;border-radius:var(--r);font-size:16px;font-weight:700;
+  background:var(--acc);color:#06231A;display:flex;align-items:center;
+  justify-content:center;gap:8px}
+.btn-m .clock{font-size:13px;font-weight:600;opacity:.85;font-variant-numeric:tabular-nums}
+.btn-i{width:46px;height:46px;border-radius:12px;background:var(--surf);
+  border:1px solid var(--bdr);color:var(--txt2);
+  display:flex;align-items:center;justify-content:center}
+.btn-i svg{width:19px;height:19px}
+.btn-i.on{border-color:var(--acc);color:var(--acc)}
+
+/* ── history chart ── */
+.hist{background:var(--surf);border-radius:var(--r);padding:.8rem;border:1px solid var(--bdr)}
+.htit{font-size:11px;color:var(--txt2);margin-bottom:8px;font-weight:600;
+  display:flex;justify-content:space-between;align-items:center}
+.htit span{font-size:9px;color:var(--muted)}
+.chart-area{position:relative;height:72px}
+.bars{display:flex;gap:5px;align-items:flex-end;height:54px}
+.bc{flex:1;display:flex;flex-direction:column;align-items:center;gap:0}
+.bar-stack{width:100%;position:relative;border-radius:4px 4px 2px 2px;
+  display:flex;flex-direction:column;justify-content:flex-end}
+.bar-bg{width:100%;border-radius:4px 4px 2px 2px;background:var(--bdr);
+  position:absolute;bottom:0;left:0}
+.bar-fill{width:100%;border-radius:4px 4px 2px 2px;
+  background:var(--acc-lt);position:absolute;bottom:0;left:0;transition:height .3s}
+.bar-fill.today{background:var(--acc)}
+.bar-cnt{font-size:9px;color:var(--muted);text-align:center;margin-bottom:2px;
+  min-height:11px}
+.blbl{font-size:9px;color:var(--muted);margin-top:3px;text-align:center}
+.blbl.today{color:var(--acc-lt)}
+
+/* ── break overlay ── */
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);
+  z-index:100;flex-direction:column;align-items:center;justify-content:center;
+  gap:.85rem;padding:2rem;text-align:center}
+.ov.show{display:flex}
+.ov h2{font-size:20px;font-weight:700}
+.ov p{font-size:13px;color:var(--txt2);max-width:280px;line-height:1.6}
+.ov .big{font-size:52px}
+.ov .deva-big{font-size:22px;color:var(--acc-lt);font-weight:700}
+.ov .ok{background:var(--acc);color:#06231A;font-size:15px;font-weight:700;
+  padding:12px 32px;border-radius:var(--r);border:none;cursor:pointer}
+
+/* ── settings drawer ── */
+.dr{display:none;position:fixed;inset:0;z-index:90;align-items:flex-end}
+.dr.show{display:flex}
+.dr-bg{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+.dr-pn{position:relative;background:var(--surf);border-radius:20px 20px 0 0;
+  width:100%;max-width:420px;margin:0 auto;padding:1.3rem 1.1rem;
+  display:flex;flex-direction:column;gap:.8rem;max-height:88vh;overflow-y:auto}
+.dr-pn h3{font-size:15px;font-weight:700}
+.srow{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.srow label{font-size:12.5px;color:var(--txt2);flex:1}
+.srow input[type=number]{width:62px;padding:6px 8px;border-radius:8px;
+  background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);
+  font-size:14px;text-align:center}
+.srow input[type=text]{flex:1;padding:7px 10px;border-radius:8px;
+  background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);font-size:13px}
+.tog{width:44px;height:26px;border-radius:13px;background:var(--bdr);
+  position:relative;cursor:pointer;border:none;transition:background .2s;flex-shrink:0}
+.tog.on{background:var(--acc)}
+.tog::after{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;
+  border-radius:50%;background:#fff;transition:transform .2s}
+.tog.on::after{transform:translateX(18px)}
+.dr-close{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer}
+.divider{border-top:1px solid var(--bdr);padding-top:.6rem}
+.voice-info{font-size:11px;color:var(--acc-lt);background:var(--surf2);
+  border-radius:8px;padding:7px 10px;line-height:1.5}
+
+footer{text-align:center}
+footer p{font-size:9.5px;color:var(--muted)}
+
+/* ── DND banner ── */
+.dnd-banner{
+  display:none;position:fixed;bottom:0;left:0;right:0;z-index:80;
+  background:linear-gradient(135deg,#1a2e20,#0f1e14);
+  border-top:1.5px solid var(--acc-dim);
+  padding:.7rem 1rem;align-items:center;gap:.75rem;
+  max-width:420px;margin:0 auto;
+}
+.dnd-banner.show{display:flex}
+.dnd-icon{font-size:22px;flex-shrink:0}
+.dnd-text{flex:1}
+.dnd-text strong{font-size:12px;color:var(--acc-lt);display:block;margin-bottom:1px}
+.dnd-text span{font-size:10.5px;color:var(--txt2);line-height:1.4}
+.dnd-steps{font-size:10px;color:var(--muted);margin-top:2px;line-height:1.5}
+.dnd-dismiss{background:none;border:1px solid var(--muted);color:var(--muted);
+  font-size:11px;padding:4px 10px;border-radius:8px;cursor:pointer;flex-shrink:0;
+  white-space:nowrap}
+.dnd-dismiss:active{opacity:.7}
+
+/* ── Grace countdown between rounds ── */
+.grace-wrap{
+  display:none;flex-direction:column;align-items:center;gap:5px;
+  padding:.5rem .75rem;background:var(--surf2);
+  border-radius:12px;border:1px solid var(--warn);
+}
+.grace-label{font-size:11px;color:var(--warn);font-weight:600;letter-spacing:.04em}
+.grace-row{display:flex;align-items:center;gap:8px;width:100%}
+.grace-track{flex:1;height:6px;background:var(--bdr);border-radius:3px;overflow:hidden}
+.grace-fill{height:6px;background:var(--warn);border-radius:3px;width:0%;transition:width .1s linear}
+.grace-num{font-size:18px;font-weight:700;color:var(--warn);min-width:24px;text-align:center}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header: program name + gear -->
+  <header>
+    <div>
+      <div class="prog-name" id="prog-name">Surya Namaskara</div>
+      <div id="day-label">Loading…</div>
+    </div>
+    <button class="gear" id="settings-btn" aria-label="Settings">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06
+          a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09
+          A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83
+          l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09
+          A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83
+          l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09
+          a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83
+          l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09
+          a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- Stats: Today / Goal / Streak / Total -->
+  <div class="stats">
+    <div class="stat"><div class="lbl">Today</div><div class="val" id="s-today">0</div></div>
+    <div class="stat hi"><div class="lbl">Goal</div><div class="val" id="s-goal">-</div></div>
+    <div class="stat"><div class="lbl">Streak</div><div class="val" id="s-streak">0</div></div>
+    <div class="stat"><div class="lbl">Total</div><div class="val" id="s-total">0</div></div>
+  </div>
+
+  <!-- Time cards: today session time + cumulative total -->
+  <div class="time-row">
+    <div class="time-card">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+      </svg>
+      <div>
+        <div class="tlbl">Today's time</div>
+        <div class="tval" id="time-today">0s</div>
+      </div>
+    </div>
+    <div class="time-card">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/>
+        <path d="M12 6v6l3 3"/>
+        <path d="M16.5 2.5l1 1.5M7.5 2.5l-1 1.5"/>
+      </svg>
+      <div>
+        <div class="tlbl">Total time</div>
+        <div class="tval" id="time-total">0s</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ring -->
+  <div class="ring-wrap">
+    <svg width="220" height="220" viewBox="0 0 220 220">
+      <circle cx="110" cy="110" r="98" fill="none" stroke="var(--bdr)" stroke-width="10"/>
+      <circle id="ring" cx="110" cy="110" r="98" fill="none" stroke="var(--acc)"
+        stroke-width="10" stroke-linecap="round"
+        stroke-dasharray="615.75" stroke-dashoffset="615.75"
+        style="transition:stroke-dashoffset .3s ease"/>
+    </svg>
+    <div class="rc">
+      <div class="mantra-roman"  id="r-mantra">☀️</div>
+      <div class="mantra-deva"   id="r-devanagari"></div>
+      <div class="mantra-mean"   id="r-meaning"></div>
+      <div class="pose-name"     id="r-pose">Ready</div>
+      <div class="pose-breath"   id="r-breath">Tap Start</div>
+      <div class="pnum"          id="r-pnum"></div>
+      <div class="tbar-wrap" id="tbar-wrap" style="display:none">
+        <div class="tbar" id="tbar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Set dots -->
+  <div class="dots" id="dots"></div>
+
+
+  <!-- Grace countdown between rounds -->
+  <div class="grace-wrap" id="grace-wrap">
+    <div class="grace-label">🕐 REST — Next round starting in</div>
+    <div class="grace-row">
+      <div class="grace-track"><div class="grace-fill" id="grace-bar"></div></div>
+      <div class="grace-num" id="grace-count">5</div>
+    </div>
+  </div>
+
+  <!-- Pace control — prominent, easy to tap -->
+  <div class="pace-row">
+    <span>Pace</span>
+    <button class="spd" id="spd-dn">−</button>
+    <div class="spd-v" id="spd-v">5s</div>
+    <button class="spd" id="spd-up">+</button>
+    <span>per pose</span>
+  </div>
+
+  <!-- Controls: voice | START (with live clock) | reset -->
+  <div class="ctrl">
+    <button class="btn-i" id="voice-btn" aria-label="Toggle voice">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+      </svg>
+    </button>
+    <button class="btn-m" id="main-btn">
+      <span id="main-label">▶ Start</span>
+      <span class="clock" id="session-clock"></span>
+    </button>
+    <button class="btn-i" id="reset-btn" aria-label="Reset">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- 7-day history chart -->
+  <div class="hist">
+    <div class="htit">
+      Last 7 days
+      <span>bar = sets done / goal</span>
+    </div>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <footer><p id="status">Data saved on this device</p></footer>
+</div>
+
+<!-- Break overlay -->
+<div class="ov" id="break-ov">
+  <div class="big">🧘</div>
+  <div class="deva-big">ॐ शान्तिः</div>
+  <h2>Rest — Savasana</h2>
+  <p>Completed <strong id="break-n">12</strong> sets continuously.<br>
+     Lie flat. Breathe slowly for 1–2 minutes.</p>
+  <button class="ok" id="break-ok">I'm rested — Continue</button>
+</div>
+
+<!-- Settings drawer -->
+<div class="dr" id="dr">
+  <div class="dr-bg" id="dr-bg"></div>
+  <div class="dr-pn">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3>⚙ Settings</h3>
+      <button class="dr-close" id="dr-close">✕</button>
+    </div>
+
+    <!-- Program name -->
+    <div class="srow">
+      <label style="flex:0 0 auto;margin-right:8px">Program name</label>
+    </div>
+    <input type="text" id="cfg-name" placeholder="Program name" style="width:100%;padding:8px 10px;border-radius:9px;background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);font-size:13px">
+
+    <!-- Pace (also editable here) -->
+    <div class="srow divider">
+      <label>Seconds per pose (pace)</label>
+      <input type="number" id="cfg-pace" min="2" max="30" value="5">
+    </div>
+
+    <div class="srow">
+      <label>Grace time between rounds (sec)</label>
+      <input type="number" id="cfg-grace" min="0" max="30" value="5">
+    </div>
+    <div class="srow">
+      <label>Daily increase (sets/day)</label>
+      <input type="number" id="cfg-inc" min="1" max="20" value="4">
+    </div>
+    <div class="srow">
+      <label>Today's goal (manual override, 0=auto)</label>
+      <input type="number" id="cfg-goal" min="0" max="108" value="0">
+    </div>
+    <div class="srow">
+      <label>Max sets cap per day</label>
+      <input type="number" id="cfg-max" min="1" max="108" value="108">
+    </div>
+    <div class="srow">
+      <label>Break reminder every N sets</label>
+      <input type="number" id="cfg-brk" min="1" max="108" value="12">
+    </div>
+
+    <div class="srow divider">
+      <label>Voice mantras (Sanskrit / hi-IN)</label>
+      <button class="tog on" id="tog-voice"></button>
+    </div>
+    <div class="voice-info" id="cfg-voice-info">Detecting voice…</div>
+
+    <div class="srow">
+      <label>Auto-advance poses</label>
+      <button class="tog on" id="tog-auto"></button>
+    </div>
+
+    <div class="srow divider">
+      <label>Program total sets (correct if needed)</label>
+      <input type="number" id="cfg-lifetime" min="0" value="0" style="width:70px">
+    </div>
+
+    <div class="srow" style="padding-top:.2rem">
+      <label style="color:var(--danger)">Reset all data</label>
+      <button class="btn-i" id="reset-data"
+              style="color:var(--danger);border-color:var(--danger)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14H6L5 6"/>
+          <path d="M10 11v6M14 11v6M9 6V4h6v2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- DND reminder banner — shown during active session -->
+<div class="dnd-banner" id="dnd-banner">
+  <div class="dnd-icon">🔕</div>
+  <div class="dnd-text">
+    <strong>Screen stay-on is active ✓</strong>
+    <span>For zero distractions, enable Do Not Disturb:</span>
+    <div class="dnd-steps">Swipe down → long-press 🔕 DND icon → Turn on</div>
+  </div>
+  <button class="dnd-dismiss" id="dnd-dismiss">Got it</button>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
