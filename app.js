@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v11";
+const KEY  = "surya-v12";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -27,9 +27,11 @@ let cfg = {
   maxSets       : 108,
   breakEvery    : 12,
   voiceOn       : true,
+  mantrasOn     : true,   // speak Sanskrit mantras
+  breathOn      : true,   // speak inhale/exhale cue after mantra
   autoOn        : true,
   poseSeconds   : 5,
-  graceSeconds  : 5,    // rest gap between rounds   // seconds per pose — fixed & working
+  graceSeconds  : 5,
 };
 
 /* ── Data (persisted) ───────────────────────────────────────── */
@@ -90,10 +92,19 @@ function todayGoal() {
 
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
+  // Try current key first, then migrate from older keys
+  const OLD_KEYS = ["surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5","surya-v4","surya-v3"];
   try {
-    const raw = localStorage.getItem(KEY);
+    let raw = localStorage.getItem(KEY);
+    if(!raw) {
+      // Try to migrate from an older version
+      for(const ok of OLD_KEYS) {
+        const oldRaw = localStorage.getItem(ok);
+        if(oldRaw) { raw = oldRaw; console.log("Migrated from", ok); break; }
+      }
+    }
     if(raw){ const sv=JSON.parse(raw); Object.assign(cfg,sv.cfg||{}); Object.assign(data,sv.data||{}); }
-    // Migrate old format (history value was plain number)
+    // Migrate old history format (plain number → object)
     Object.keys(data.history).forEach(k=>{
       if(typeof data.history[k]==="number")
         data.history[k]={ sets: data.history[k], timeMs: 0 };
@@ -175,9 +186,12 @@ function makeEnUtt(text) {
 // Speak mantra (Sanskrit) then optional breath cue (English) — queued
 function speakMantra(text, breath="", delay=0) {
   if(voiceMuted || !window.speechSynthesis) return;
+  const doMantra = cfg.mantrasOn !== false;
+  const doBreath = cfg.breathOn  !== false && breath;
+  if(!doMantra && !doBreath) return;
   setTimeout(()=>{
-    qSpeak(makeMantraUtt(text));
-    if(breath) qSpeak(makeEnUtt(breath));
+    if(doMantra) qSpeak(makeMantraUtt(text));
+    if(doBreath) qSpeak(makeEnUtt(breath));
   }, delay);
 }
 
@@ -634,8 +648,10 @@ function openSettings() {
   document.getElementById("cfg-pace").value     = cfg.poseSeconds;
   document.getElementById("cfg-grace").value    = cfg.graceSeconds;
   document.getElementById("cfg-lifetime").value = data.totalAllTime;
-  togSet("tog-voice",cfg.voiceOn);
-  togSet("tog-auto",cfg.autoOn);
+  togSet("tog-voice",   cfg.voiceOn);
+  togSet("tog-mantras", cfg.mantrasOn !== false);
+  togSet("tog-breath",  cfg.breathOn  !== false);
+  togSet("tog-auto",    cfg.autoOn);
   document.getElementById("cfg-voice-info").textContent =
     hiVoice ? "Active: "+hiVoice.name+" ("+hiVoice.lang+")"
             : "No hi-IN voice — install Hindi TTS in Android Settings → Language → Text-to-speech.";
@@ -651,16 +667,20 @@ function closeSettings() {
   cfg.graceSeconds  = Math.max(0, Math.min(30, parseInt(document.getElementById("cfg-grace").value)||5));
   const lt=parseInt(document.getElementById("cfg-lifetime").value);
   if(!isNaN(lt)&&lt>=0) data.totalAllTime=lt;
-  cfg.voiceOn=togGet("tog-voice"); cfg.autoOn=togGet("tog-auto");
-  voiceMuted=!cfg.voiceOn;
+  cfg.voiceOn   = togGet("tog-voice");
+  cfg.mantrasOn = togGet("tog-mantras");
+  cfg.breathOn  = togGet("tog-breath");
+  cfg.autoOn    = togGet("tog-auto");
+  voiceMuted    = !cfg.voiceOn;
   saveAll(); render();
   document.getElementById("dr").classList.remove("show");
 }
 const togSet=(id,on)=>document.getElementById(id).classList.toggle("on",on);
 const togGet=id=>document.getElementById(id).classList.contains("on");
-["tog-voice","tog-auto"].forEach(id=>
-  document.getElementById(id).addEventListener("click",function(){this.classList.toggle("on");})
-);
+["tog-voice","tog-mantras","tog-breath","tog-auto"].forEach(id=>{
+  const el = document.getElementById(id);
+  if(el) el.addEventListener("click",function(){this.classList.toggle("on");});
+});
 document.getElementById("settings-btn").addEventListener("click",openSettings);
 document.getElementById("dr-close").addEventListener("click",closeSettings);
 document.getElementById("dr-bg").addEventListener("click",closeSettings);
