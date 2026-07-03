@@ -17,18 +17,17 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v12";
+const KEY  = "surya-v13";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
   programName   : "Vaibhav's SuryaNamskara Challenge 108",
   dailyIncrease : 4,
-  todayGoal     : 0,
   maxSets       : 108,
   breakEvery    : 12,
   voiceOn       : true,
-  mantrasOn     : true,   // speak Sanskrit mantras
-  breathOn      : true,   // speak inhale/exhale cue after mantra
+  mantrasOn     : true,
+  breathOn      : true,
   autoOn        : true,
   poseSeconds   : 5,
   graceSeconds  : 5,
@@ -36,11 +35,13 @@ let cfg = {
 
 /* ── Data (persisted) ───────────────────────────────────────── */
 let data = {
-  history       : {},   // { "YYYY-MM-DD": { sets, timeMs } }
+  history       : {},   // { "YYYY-MM-DD": { sets, timeMs, goal } }
   totalAllTime  : 0,
-  totalTimeMs   : 0,    // cumulative time across all sessions (ms)
+  totalTimeMs   : 0,
   programDay    : 1,
   lastDate      : "",
+  baseGoal      : 0,    // today's goal (editable); 0 = auto from programDay
+  goalDate      : "",   // date baseGoal was set for; resets +4 on new day
 };
 
 /* ── Session (runtime) ──────────────────────────────────────── */
@@ -86,8 +87,23 @@ function computeStreak() {
 function todayDoneFor(key) { return (data.history[key]||{}).sets || 0; }
 
 function todayGoal() {
-  if(cfg.todayGoal>0) return Math.min(cfg.todayGoal, cfg.maxSets);
+  // If a manual goal was set for today, use it
+  if(data.baseGoal > 0 && data.goalDate === todayKey())
+    return Math.min(data.baseGoal, cfg.maxSets);
+  // Auto: yesterday's goal + dailyIncrease (or programDay * increase on day 1)
   return Math.min(data.programDay * cfg.dailyIncrease, cfg.maxSets);
+}
+
+function setTodayGoal(n) {
+  // Save a manual goal for today; tomorrow it auto-adds dailyIncrease on top
+  data.baseGoal = Math.max(1, Math.min(n, cfg.maxSets));
+  data.goalDate = todayKey();
+  // Align programDay so auto-formula gives the right number next day:
+  // next day goal = (programDay+1)*dailyIncrease
+  // we want that = data.baseGoal + dailyIncrease
+  // so programDay = data.baseGoal / dailyIncrease (rounded)
+  data.programDay = Math.max(1, Math.round(data.baseGoal / cfg.dailyIncrease));
+  saveAll();
 }
 
 /* ── Persist ─────────────────────────────────────────────────── */
@@ -111,7 +127,12 @@ function loadAll() {
     });
   } catch(e){}
   const today = todayKey();
-  if(data.lastDate && data.lastDate !== today) data.programDay=(data.programDay||1)+1;
+  if(data.lastDate && data.lastDate !== today) {
+    data.programDay = (data.programDay||1) + 1;
+    // Clear manual goal override so tomorrow uses auto formula (+dailyIncrease)
+    data.baseGoal = 0;
+    data.goalDate = "";
+  }
   data.lastDate = today;
   voiceMuted = !cfg.voiceOn;
 }
@@ -642,7 +663,7 @@ document.querySelector(".ring-wrap").addEventListener("click",()=>{
 function openSettings() {
   document.getElementById("cfg-name").value     = cfg.programName;
   document.getElementById("cfg-inc").value      = cfg.dailyIncrease;
-  document.getElementById("cfg-goal").value     = cfg.todayGoal||todayGoal();
+  document.getElementById("cfg-goal").value     = todayGoal();
   document.getElementById("cfg-max").value      = cfg.maxSets;
   document.getElementById("cfg-brk").value      = cfg.breakEvery;
   document.getElementById("cfg-pace").value     = cfg.poseSeconds;
@@ -659,8 +680,9 @@ function openSettings() {
 }
 function closeSettings() {
   cfg.programName   = document.getElementById("cfg-name").value.trim() || cfg.programName;
-  cfg.dailyIncrease = parseInt(document.getElementById("cfg-inc").value)  ||4;
-  cfg.todayGoal     = parseInt(document.getElementById("cfg-goal").value)  ||0;
+  cfg.dailyIncrease = parseInt(document.getElementById("cfg-inc").value) || 4;
+  const newGoal = parseInt(document.getElementById("cfg-goal").value) || 0;
+  if(newGoal > 0 && newGoal !== todayGoal()) setTodayGoal(newGoal);
   cfg.maxSets       = parseInt(document.getElementById("cfg-max").value)   ||108;
   cfg.breakEvery    = parseInt(document.getElementById("cfg-brk").value)   ||12;
   cfg.poseSeconds   = Math.max(2, Math.min(30, parseInt(document.getElementById("cfg-pace").value)||5));
