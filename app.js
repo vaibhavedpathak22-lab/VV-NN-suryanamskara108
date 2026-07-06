@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v13";
+const KEY  = "surya-v15";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -42,6 +42,7 @@ let data = {
   lastDate      : "",
   baseGoal      : 0,    // today's goal (editable); 0 = auto from programDay
   goalDate      : "",   // date baseGoal was set for; resets +4 on new day
+  lastGoal      : 0,    // goal of last completed day — used for exact +4 calc
 };
 
 /* ── Session (runtime) ──────────────────────────────────────── */
@@ -90,7 +91,10 @@ function todayGoal() {
   // If a manual goal was set for today, use it
   if(data.baseGoal > 0 && data.goalDate === todayKey())
     return Math.min(data.baseGoal, cfg.maxSets);
-  // Auto: yesterday's goal + dailyIncrease (or programDay * increase on day 1)
+  // Use exact last goal + increase (avoids drift on non-multiples of 4)
+  if(data.lastGoal > 0)
+    return Math.min(data.lastGoal + cfg.dailyIncrease, cfg.maxSets);
+  // Fallback for Day 1
   return Math.min(data.programDay * cfg.dailyIncrease, cfg.maxSets);
 }
 
@@ -129,7 +133,9 @@ function loadAll() {
   const today = todayKey();
   if(data.lastDate && data.lastDate !== today) {
     data.programDay = (data.programDay||1) + 1;
-    // Clear manual goal override so tomorrow uses auto formula (+dailyIncrease)
+    // Save yesterday's actual goal before clearing manual override
+    const yRec = data.history[data.lastDate];
+    if(yRec && yRec.goal) data.lastGoal = yRec.goal;
     data.baseGoal = 0;
     data.goalDate = "";
   }
@@ -372,6 +378,7 @@ function completeSet() {
   if(!data.history[today]) data.history[today]={ sets:0, timeMs:0, goal:0 };
   data.history[today].sets += 1;
   data.history[today].goal = todayGoal();
+  data.lastGoal = todayGoal();   // keep lastGoal current within the day
   data.totalAllTime += 1;
   sess.breakAcc += 1;
   saveAll();
@@ -590,43 +597,58 @@ function render() {
   renderBars();
 }
 
-/* ── 7-day chart — bars by sets done vs goal ─────────────────── */
+/* ── 7-day chart ─────────────────────────────────────────────── */
 function renderBars() {
-  const el=document.getElementById("bars");
-  el.innerHTML="";
-  const days=[];
-  for(let i=6;i>=0;i--) days.push(dayKey(i));
-  const tk=todayKey();
+  const el = document.getElementById("bars");
+  el.innerHTML = "";
+  const CHART_H = 48; // px — total bar column height
+  const days = [];
+  for(let i=6; i>=0; i--) days.push(dayKey(i));
+  const tk = todayKey();
 
-  days.forEach(d=>{
-    const rec    = data.history[d]||{};
-    const sets   = rec.sets || 0;
-    // goal for that day: use today's for today; for past days use stored or estimate
-    const goal   = d===tk ? todayGoal() : (rec.goal || sets || 1);
-    const frac   = goal>0 ? Math.min(1, sets/goal) : 0;
-    const h      = Math.max(4, Math.round(frac*48));
+  // Find max sets in window for scaling (minimum 1 to avoid divide-by-zero)
+  const maxSets = Math.max(1, ...days.map(d => (data.history[d]||{}).sets || 0));
 
-    const col=document.createElement("div"); col.className="bc";
+  days.forEach(d => {
+    const rec  = data.history[d] || {};
+    const sets = rec.sets || 0;
+    const goal = d === tk ? todayGoal() : (rec.goal || 0);
+    const isToday = d === tk;
 
-    // Progress bar (filled = done, empty = goal gap)
-    const barWrap=document.createElement("div");
-    barWrap.style.cssText="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:48px;gap:1px";
+    // Bar height: scale by sets relative to maxSets in window
+    const h = sets > 0 ? Math.max(6, Math.round((sets / maxSets) * CHART_H)) : 3;
 
-    const barDone=document.createElement("div");
-    barDone.className="bar"+(sets>0?" d":"")+(d===tk?" t":"");
-    barDone.style.height=h+"px";
-    barDone.title=sets+" / "+goal+" sets";
+    // Column wrapper
+    const col = document.createElement("div");
+    col.style.cssText = "flex:1;display:flex;flex-direction:column;align-items:center;gap:2px";
 
-    barWrap.appendChild(barDone);
-    const lbl=document.createElement("div"); lbl.className="blbl";
-    lbl.textContent=new Date(d+"T00:00:00").toLocaleDateString(undefined,{weekday:"narrow"});
+    // Count label above bar (show sets/goal if goal known, else just sets)
+    const cnt = document.createElement("div");
+    cnt.style.cssText = "font-size:9px;color:var(--muted);text-align:center;min-height:11px";
+    if(sets > 0) cnt.textContent = goal > 0 ? sets+"/"+goal : sets;
 
-    // Count label above bar
-    const cnt=document.createElement("div");
-    cnt.style.cssText="font-size:9px;color:var(--muted);text-align:center;margin-bottom:1px";
-    cnt.textContent=sets>0?sets:"";
+    // Bar itself — simple div, height in px
+    const bar = document.createElement("div");
+    bar.style.cssText = [
+      "width:100%",
+      "border-radius:4px 4px 2px 2px",
+      "height:" + h + "px",
+      "background:" + (sets === 0 ? "var(--bdr)" : isToday ? "var(--acc)" : "var(--acc-lt)"),
+      "margin-top:auto",   // pushes bar to bottom of column
+      "flex-shrink:0",
+    ].join(";");
+    bar.title = sets + (goal>0 ? " / "+goal : "") + " sets";
 
-    col.appendChild(cnt); col.appendChild(barWrap); col.appendChild(lbl);
+    // Day label below
+    const lbl = document.createElement("div");
+    lbl.style.cssText = "font-size:9px;text-align:center;color:" +
+      (isToday ? "var(--acc-lt)" : "var(--muted)");
+    lbl.textContent = new Date(d+"T00:00:00")
+      .toLocaleDateString(undefined, {weekday:"narrow"});
+
+    col.appendChild(cnt);
+    col.appendChild(bar);
+    col.appendChild(lbl);
     el.appendChild(col);
   });
 }
@@ -682,7 +704,7 @@ function closeSettings() {
   cfg.programName   = document.getElementById("cfg-name").value.trim() || cfg.programName;
   cfg.dailyIncrease = parseInt(document.getElementById("cfg-inc").value) || 4;
   const newGoal = parseInt(document.getElementById("cfg-goal").value) || 0;
-  if(newGoal > 0 && newGoal !== todayGoal()) setTodayGoal(newGoal);
+  if(newGoal > 0) setTodayGoal(newGoal);  // always anchor programDay when user sets a goal
   cfg.maxSets       = parseInt(document.getElementById("cfg-max").value)   ||108;
   cfg.breakEvery    = parseInt(document.getElementById("cfg-brk").value)   ||12;
   cfg.poseSeconds   = Math.max(2, Math.min(30, parseInt(document.getElementById("cfg-pace").value)||5));
