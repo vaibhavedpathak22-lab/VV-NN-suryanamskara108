@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v15";
+const KEY  = "surya-v16";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -113,7 +113,7 @@ function setTodayGoal(n) {
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
   // Try current key first, then migrate from older keys
-  const OLD_KEYS = ["surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5","surya-v4","surya-v3"];
+  const OLD_KEYS = ["surya-v14","surya-v13","surya-v12","surya-v11","surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5","surya-v4","surya-v3"];
   try {
     let raw = localStorage.getItem(KEY);
     if(!raw) {
@@ -578,19 +578,34 @@ function render() {
   // Voice button
   document.getElementById("voice-btn").classList.toggle("on",!voiceMuted);
 
-  // Dots
+  // Dots — show yesterday base (dim) + today's 4 new (bright target)
+  // yesterBase = goal - dailyIncrease (the count we came from)
   const dotsEl=document.getElementById("dots");
   dotsEl.innerHTML="";
-  for(let i=1;i<=Math.min(goal,36);i++){
+  const yesterBase = Math.max(0, goal - cfg.dailyIncrease);
+  const MAX_DOTS = 60;  // max dots before overflow label
+  const showUpTo = Math.min(goal, MAX_DOTS);
+
+  for(let i=1; i<=showUpTo; i++){
     const dot=document.createElement("div");
-    dot.className="dot"+(i<=done?" done":"")+(i===done+1&&sess.active?" active":"");
-    dot.textContent=i;
+    const isDone    = i <= done;
+    const isActive  = i === done+1 && sess.active;
+    const isNewToday= i > yesterBase;  // part of today's +4 increase
+
+    let cls = "dot";
+    if(isDone && isNewToday)  cls += " done new-today";   // completed today's new ones
+    else if(isDone)           cls += " done";              // completed (was yesterday's base)
+    else if(isActive)         cls += " active";
+    else if(isNewToday)       cls += " target";            // today's new target (not yet done)
+
+    dot.className = cls;
+    dot.textContent = i;
     dotsEl.appendChild(dot);
   }
-  if(goal>36){
+  if(goal > MAX_DOTS){
     const more=document.createElement("div");
-    more.style.cssText="font-size:10px;color:var(--muted);align-self:center";
-    more.textContent="+"+(goal-36)+" more";
+    more.style.cssText="font-size:10px;color:var(--muted);align-self:center;padding:4px";
+    more.textContent="+"+(goal-MAX_DOTS)+" more";
     dotsEl.appendChild(more);
   }
 

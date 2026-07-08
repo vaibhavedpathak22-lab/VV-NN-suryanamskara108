@@ -77,8 +77,14 @@ header{display:flex;justify-content:space-between;align-items:flex-start}
 .dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr);
   font-size:8px;font-weight:700;color:var(--muted);
   display:flex;align-items:center;justify-content:center;transition:all .2s}
-.dot.done{background:var(--acc);border-color:var(--acc);color:#06231A}
-.dot.active{border-color:var(--acc-lt);color:var(--acc-lt);animation:pulse 1s infinite}
+/* completed from yesterday's base count */
+.dot.done{background:var(--acc-dim);border-color:var(--acc);color:var(--acc-lt)}
+/* completed AND part of today's new +4 target */
+.dot.done.new-today{background:var(--acc);border-color:var(--acc);color:#06231A}
+/* today's new target dots — not yet completed */
+.dot.target{border-color:var(--acc-lt);border-style:dashed;color:var(--acc-lt)}
+/* currently active pose */
+.dot.active{border-color:var(--acc-lt);border-style:solid;color:var(--acc-lt);animation:pulse 1s infinite}
 @keyframes pulse{
   0%,100%{box-shadow:0 0 0 0 rgba(93,224,168,.4)}
   50%{box-shadow:0 0 0 5px rgba(93,224,168,0)}}
