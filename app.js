@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v19";
+const KEY  = "surya-v20";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -31,7 +31,7 @@ let cfg = {
   autoOn        : true,
   poseSeconds   : 5,
   graceSeconds  : 5,
-  chartDays     : 21,   // history window: 7 / 14 / 21
+  chartDays     : 7,    // history window: 7 → 14 → 21 (cycles)
   chartMode     : "bar", // "bar" | "line"
 };
 
@@ -666,8 +666,7 @@ function render() {
 
 /* ── History chart — bar / line / dot ────────────────────────── */
 function renderBars() {
-  // Defer until DOM has painted so clientWidth is real
-  requestAnimationFrame(() => _drawChart());
+  requestAnimationFrame(_drawChart);
 }
 
 function _drawChart() {
@@ -675,312 +674,184 @@ function _drawChart() {
   if(!wrap) return;
   wrap.innerHTML = "";
 
-  const N    = cfg.chartDays || 21;
+  const N    = cfg.chartDays || 7;
   const mode = cfg.chartMode || "bar";
   const tk   = todayKey();
 
-  // Build data points oldest → newest
+  // Build data oldest → newest
   const pts = [];
-  for(let i=N-1; i>=0; i--) {
+  for(let i = N-1; i >= 0; i--) {
     const d   = dayKey(i);
     const rec = data.history[d] || {};
     const sets = typeof rec === "number" ? rec : (rec.sets || 0);
-    const goal = d === tk ? todayGoal() : (typeof rec === "number" ? 0 : (rec.goal || 0));
-    const incomplete = d === tk && sets < goal && goal > 0;
-    pts.push({ d, sets, goal, isToday: d===tk, incomplete });
+    const goal = d === tk
+      ? todayGoal()
+      : (typeof rec === "number" ? 0 : (rec.goal || 0));
+    pts.push({ d, sets, goal, isToday: d === tk });
   }
 
-  // Scale: base on max of either sets or goal so bars are proportional
   const maxVal = Math.max(1, ...pts.map(p => Math.max(p.sets, p.goal)));
-
-  // ── COLORS ──────────────────────────────────────────────────
-  const C_GOAL_PAST  = "#1E3D28";   // past day goal bar (dark green)
-  const C_SETS_PAST  = "#5DE0A8";   // past day sets bar (light green)
-  const C_GOAL_TODAY = "#0F6E56";   // today goal bar (mid green)
-  const C_SETS_TODAY = "#1DB87F";   // today sets bar (bright green)
-  const C_INCOMPLETE = "#E8A030";   // today incomplete remaining (amber)
-  const C_EMPTY      = "#1A2820";   // no data
-  const C_TEXT_TODAY = "#5DE0A8";
-  const C_TEXT_PAST  = "#5A7065";
-  const C_TEXT_MUTED = "#3A5040";
-
-  const CH = 100; // chart column height in px
-
-  // Width — use offsetWidth (reliable after rAF)
   const PW   = wrap.offsetWidth || 320;
   const GAP  = N > 14 ? 2 : 3;
-  const colW = Math.max(10, Math.floor((PW - GAP*(N-1)) / N));
+  const colW = Math.max(10, Math.floor((PW - GAP * (N - 1)) / N));
+  const CH   = 80;   // bar height px
+  const LH   = 32;   // label area above bar (number + goal)
+  const DH   = 20;   // date label below bar
+  const TOT  = LH + CH + DH;
 
-  // ════════════════════════════════════════════════════════════
-  // BAR chart
-  // ════════════════════════════════════════════════════════════
+  // Colors — simple, same as before
+  const barCol  = p => p.isToday ? "#1DB87F" : (p.sets > 0 ? "#5DE0A8" : "#1E2E22");
+  const lblCol  = p => p.isToday ? "#5DE0A8" : (p.sets > 0 ? "#9DB8A8" : "#3A5040");
+  const dateCol = p => p.isToday ? "#5DE0A8" : "#5A7065";
+
+  /* ── BAR ──────────────────────────────────────────────────── */
   if(mode === "bar") {
-    const LABEL_H = 30;  // space above bar for numbers
-    const DATE_H  = 22;  // space below bar for date
-    const TOTAL_H = CH + LABEL_H + DATE_H;
-
     const flex = document.createElement("div");
-    flex.style.cssText = [
-      "display:flex", "gap:"+GAP+"px", "width:100%",
-      "height:"+TOTAL_H+"px", "overflow-x:auto", "align-items:flex-end",
-    ].join(";");
+    flex.style.cssText =
+      "display:flex;gap:"+GAP+"px;width:100%;height:"+TOT+"px;align-items:flex-end";
 
-    pts.forEach(p => {
+    pts.forEach((p, idx) => {
       const col = document.createElement("div");
-      col.style.cssText = [
-        "flex:0 0 "+colW+"px",
-        "display:flex", "flex-direction:column",
-        "align-items:center", "height:"+TOTAL_H+"px",
-        "position:relative",
-      ].join(";");
+      col.style.cssText =
+        "flex:0 0 "+colW+"px;display:flex;flex-direction:column;" +
+        "align-items:center;height:"+TOT+"px";
 
-      // ── Label area (top LABEL_H px) ──
-      const labelArea = document.createElement("div");
-      labelArea.style.cssText = [
-        "height:"+LABEL_H+"px", "display:flex",
-        "flex-direction:column", "align-items:center",
-        "justify-content:flex-end", "gap:1px", "width:100%",
-      ].join(";");
+      /* label area ------------------------------------------ */
+      const la = document.createElement("div");
+      la.style.cssText =
+        "height:"+LH+"px;width:100%;display:flex;flex-direction:column;" +
+        "align-items:center;justify-content:flex-end;gap:1px;padding-bottom:3px";
 
-      if(p.sets > 0 || p.goal > 0) {
-        // Sets count (top)
-        const sLbl = document.createElement("div");
-        sLbl.style.cssText = "font-size:"+(N>14?"8":"9")+"px;font-weight:700;color:"+
-          (p.isToday ? C_TEXT_TODAY : C_SETS_PAST)+";line-height:1.1;text-align:center";
-        if(p.sets > 0) sLbl.textContent = p.sets;
-        labelArea.appendChild(sLbl);
+      if(p.sets > 0 || (p.isToday && p.goal > 0)) {
+        // top line: completed count
+        const t1 = document.createElement("div");
+        t1.style.cssText =
+          "font-size:"+(N>14?"8":"9")+"px;font-weight:800;color:"+lblCol(p)+
+          ";line-height:1;text-align:center;white-space:nowrap";
+        t1.textContent = p.sets > 0 ? String(p.sets) : "0";
+        la.appendChild(t1);
 
-        // Goal count (below sets)
+        // bottom line: /goal
         if(p.goal > 0) {
-          const gLbl = document.createElement("div");
-          gLbl.style.cssText = "font-size:7px;color:"+C_TEXT_MUTED+";line-height:1;text-align:center";
-          gLbl.textContent = "/"+p.goal;
-          labelArea.appendChild(gLbl);
+          const t2 = document.createElement("div");
+          t2.style.cssText =
+            "font-size:7px;color:#3A5040;line-height:1;text-align:center";
+          t2.textContent = "/"+p.goal;
+          la.appendChild(t2);
         }
       }
-      col.appendChild(labelArea);
+      col.appendChild(la);
 
-      // ── Bar area ──────────────────────────────────────────
-      // We draw a stacked bar: [sets done] + [remaining to goal if incomplete]
-      const barWrap = document.createElement("div");
-      barWrap.style.cssText = [
-        "width:100%", "height:"+CH+"px",
-        "display:flex", "flex-direction:column",
-        "justify-content:flex-end", "align-items:center",
-        "gap:0", "position:relative",
-      ].join(";");
+      /* bar ------------------------------------------------- */
+      const barH = p.sets > 0
+        ? Math.max(6, Math.round((p.sets / maxVal) * CH))
+        : 3;
+      const bar = document.createElement("div");
+      bar.style.cssText =
+        "width:100%;height:"+barH+"px;flex-shrink:0;" +
+        "border-radius:3px 3px 2px 2px;background:"+barCol(p)+";margin-top:auto";
+      col.appendChild(bar);
 
-      if(p.goal > 0) {
-        // Ghost bar = full goal height (background)
-        const goalH = Math.round((p.goal / maxVal) * CH);
-        const ghostBar = document.createElement("div");
-        ghostBar.style.cssText = [
-          "position:absolute", "bottom:0", "width:100%",
-          "height:"+goalH+"px",
-          "background:"+(p.isToday ? C_GOAL_TODAY : C_GOAL_PAST),
-          "border-radius:3px 3px 2px 2px",
-        ].join(";");
-        barWrap.appendChild(ghostBar);
-
-        // If incomplete today — amber top portion (remaining)
-        if(p.incomplete) {
-          const remH = Math.round(((p.goal - p.sets) / maxVal) * CH);
-          const remBar = document.createElement("div");
-          remBar.style.cssText = [
-            "position:absolute", "bottom:"+(goalH - remH)+"px", "width:100%",
-            "height:"+remH+"px",
-            "background:"+C_INCOMPLETE,
-            "border-radius:3px 3px 0 0",
-            "opacity:0.85",
-            "animation:incompletePulse 1.5s ease-in-out infinite",
-          ].join(";");
-          barWrap.appendChild(remBar);
-        }
-
-        // Sets done bar (foreground, on top of ghost)
-        if(p.sets > 0) {
-          const setsH = Math.round((p.sets / maxVal) * CH);
-          const setsBar = document.createElement("div");
-          setsBar.style.cssText = [
-            "position:absolute", "bottom:0", "width:100%",
-            "height:"+setsH+"px",
-            "background:"+(p.isToday ? C_SETS_TODAY : C_SETS_PAST),
-            "border-radius:3px 3px 2px 2px",
-          ].join(";");
-          barWrap.appendChild(setsBar);
-        }
-      } else if(p.sets > 0) {
-        // No goal stored (old data) — just show sets bar
-        const setsH = Math.max(6, Math.round((p.sets / maxVal) * CH));
-        const setsBar = document.createElement("div");
-        setsBar.style.cssText = [
-          "position:absolute", "bottom:0", "width:100%",
-          "height:"+setsH+"px",
-          "background:"+C_SETS_PAST,
-          "border-radius:3px 3px 2px 2px",
-        ].join(";");
-        barWrap.appendChild(setsBar);
-      } else {
-        // Empty day — thin line
-        const emptyBar = document.createElement("div");
-        emptyBar.style.cssText = [
-          "position:absolute", "bottom:0", "width:100%",
-          "height:3px", "background:"+C_EMPTY,
-          "border-radius:2px",
-        ].join(";");
-        barWrap.appendChild(emptyBar);
-      }
-
-      col.appendChild(barWrap);
-
-      // ── Date label ─────────────────────────────────────────
+      /* date label ------------------------------------------ */
       const dt  = new Date(p.d + "T00:00:00");
-      const lbl = document.createElement("div");
-      lbl.style.cssText = [
-        "font-size:"+(N>14?"7":"8")+"px",
-        "text-align:center", "margin-top:4px",
-        "color:"+(p.isToday ? C_TEXT_TODAY : C_TEXT_PAST),
-        "height:"+(DATE_H-4)+"px", "line-height:1.2",
-        "display:flex", "flex-direction:column", "align-items:center",
-      ].join(";");
+      const dl  = document.createElement("div");
+      const skip = N > 14 ? 3 : (N > 7 ? 2 : 1);
+      dl.style.cssText =
+        "font-size:"+(N>14?"7":"8")+"px;text-align:center;margin-top:4px;" +
+        "height:"+(DH-4)+"px;line-height:"+(DH-4)+"px;color:"+dateCol(p);
+      if(idx % skip === 0 || p.isToday)
+        dl.textContent = dt.toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
+      col.appendChild(dl);
 
-      const skip = N > 14 ? 3 : 1;
-      const idx  = pts.indexOf(p);
-      if(idx % skip === 0 || p.isToday) {
-        lbl.innerHTML = dt.toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
-      }
-      col.appendChild(lbl);
       flex.appendChild(col);
     });
-
     wrap.appendChild(flex);
     return;
   }
 
-  // ════════════════════════════════════════════════════════════
-  // LINE chart (SVG)
-  // ════════════════════════════════════════════════════════════
-  const SVG_H  = CH + 55;
-  const SVG_W  = colW * N + GAP * (N-1);
-  const svg    = document.createElementNS("http://www.w3.org/2000/svg","svg");
-  svg.setAttribute("width",  Math.max(SVG_W, PW));
-  svg.setAttribute("height", SVG_H);
-  svg.style.display = "block";
-  svg.style.overflow = "visible";
+  /* ── LINE (SVG) ───────────────────────────────────────────── */
+  const SW  = Math.max(PW, colW * N + GAP * (N - 1));
+  const SH  = LH + CH + DH;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width",  SW);
+  svg.setAttribute("height", SH);
+  svg.style.cssText = "display:block;overflow:visible";
 
-  const xOf = i  => Math.round(i * (colW + GAP) + colW/2);
-  const yOf = v  => Math.round(CH - (v / maxVal) * (CH - 12) + 6);
+  const xOf = i => Math.round(i * (colW + GAP) + colW / 2);
+  const yOf = v => Math.round(LH + CH - (v / maxVal) * (CH - 10) + 2);
 
-  // Grid lines
-  [0.25,0.5,0.75,1].forEach(f => {
+  // grid
+  [0.5, 1].forEach(f => {
     const gy = yOf(maxVal * f);
-    const gl = document.createElementNS("http://www.w3.org/2000/svg","line");
-    gl.setAttribute("x1",0); gl.setAttribute("x2",Math.max(SVG_W,PW));
-    gl.setAttribute("y1",gy); gl.setAttribute("y2",gy);
-    gl.setAttribute("stroke","#1E3028"); gl.setAttribute("stroke-width","1");
+    const gl = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    gl.setAttribute("x1", 0); gl.setAttribute("x2", SW);
+    gl.setAttribute("y1", gy); gl.setAttribute("y2", gy);
+    gl.setAttribute("stroke", "#1E3028"); gl.setAttribute("stroke-width", "1");
     svg.appendChild(gl);
-    // Grid value label
-    const gv = document.createElementNS("http://www.w3.org/2000/svg","text");
-    gv.setAttribute("x",2); gv.setAttribute("y",gy-2);
-    gv.setAttribute("fill","#3A5040"); gv.setAttribute("font-size","7");
+    const gv = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    gv.setAttribute("x", 2); gv.setAttribute("y", gy - 3);
+    gv.setAttribute("fill", "#3A5040"); gv.setAttribute("font-size", "7");
     gv.textContent = Math.round(maxVal * f);
     svg.appendChild(gv);
   });
 
-  // Goal line (dashed)
-  const goalPts = pts.map((p,i)=>p.goal>0?`${xOf(i)},${yOf(p.goal)}`:null).filter(Boolean);
-  if(goalPts.length > 1) {
-    const gl = document.createElementNS("http://www.w3.org/2000/svg","polyline");
-    gl.setAttribute("points", goalPts.join(" "));
-    gl.setAttribute("fill","none");
-    gl.setAttribute("stroke",C_GOAL_TODAY);
-    gl.setAttribute("stroke-width","1.5");
-    gl.setAttribute("stroke-dasharray","4,3");
-    svg.appendChild(gl);
+  // line path — only through days with data
+  const lpts = pts
+    .map((p, i) => p.sets > 0 ? `${xOf(i)},${yOf(p.sets)}` : null)
+    .filter(Boolean);
+  if(lpts.length > 1) {
+    const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    pl.setAttribute("points", lpts.join(" "));
+    pl.setAttribute("fill", "none");
+    pl.setAttribute("stroke", "#1DB87F");
+    pl.setAttribute("stroke-width", "2");
+    pl.setAttribute("stroke-linejoin", "round");
+    pl.setAttribute("stroke-linecap", "round");
+    svg.appendChild(pl);
   }
 
-  // Sets line (solid)
-  const setsPts = pts.filter(p=>p.sets>0).map((p,i)=>{
-    const ri = pts.indexOf(p);
-    return `${xOf(ri)},${yOf(p.sets)}`;
-  });
-  if(setsPts.length > 1) {
-    const sl = document.createElementNS("http://www.w3.org/2000/svg","polyline");
-    sl.setAttribute("points", setsPts.join(" "));
-    sl.setAttribute("fill","none");
-    sl.setAttribute("stroke","#1DB87F");
-    sl.setAttribute("stroke-width","2");
-    sl.setAttribute("stroke-linejoin","round");
-    sl.setAttribute("stroke-linecap","round");
-    svg.appendChild(sl);
-  }
-
-  // Dots + labels + date
+  // dots + labels
   pts.forEach((p, i) => {
     const cx = xOf(i);
+    const cy = p.sets > 0 ? yOf(p.sets) : yOf(0) + 2;
 
-    // Goal dot (small, dim)
-    if(p.goal > 0) {
-      const gc = document.createElementNS("http://www.w3.org/2000/svg","circle");
-      gc.setAttribute("cx",cx); gc.setAttribute("cy",yOf(p.goal));
-      gc.setAttribute("r","2"); gc.setAttribute("fill",C_GOAL_TODAY);
-      svg.appendChild(gc);
-    }
+    // dot
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", cx); c.setAttribute("cy", cy);
+    c.setAttribute("r",  p.isToday ? "5" : "3.5");
+    c.setAttribute("fill", p.isToday ? "#1DB87F" : (p.sets > 0 ? "#5DE0A8" : "#243328"));
+    svg.appendChild(c);
 
-    // Sets dot
-    const col = p.incomplete ? C_INCOMPLETE : (p.isToday ? C_SETS_TODAY : (p.sets>0 ? C_SETS_PAST : C_EMPTY));
-    const sc = document.createElementNS("http://www.w3.org/2000/svg","circle");
-    sc.setAttribute("cx",cx); sc.setAttribute("cy",p.sets>0?yOf(p.sets):yOf(0));
-    sc.setAttribute("r", p.isToday ? "5" : "3.5");
-    sc.setAttribute("fill", col);
-    svg.appendChild(sc);
-
-    // Value label
+    // value label above dot
     if(p.sets > 0) {
-      const vt = document.createElementNS("http://www.w3.org/2000/svg","text");
-      vt.setAttribute("x",cx); vt.setAttribute("y",yOf(p.sets)-7);
-      vt.setAttribute("text-anchor","middle");
-      vt.setAttribute("fill", p.isToday ? C_TEXT_TODAY : C_TEXT_PAST);
-      vt.setAttribute("font-size","8"); vt.setAttribute("font-weight","700");
-      vt.textContent = p.sets+(p.goal>0?"/"+p.goal:"");
+      const vt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      vt.setAttribute("x", cx); vt.setAttribute("y", cy - 8);
+      vt.setAttribute("text-anchor", "middle");
+      vt.setAttribute("fill", p.isToday ? "#5DE0A8" : "#9DB8A8");
+      vt.setAttribute("font-size", "8");
+      vt.setAttribute("font-weight", "700");
+      vt.textContent = p.sets + (p.goal > 0 ? "/"+p.goal : "");
       svg.appendChild(vt);
     }
 
-    // Date label (every Nth)
-    const skip = N > 14 ? 3 : 2;
+    // date label
+    const skip = N > 14 ? 3 : (N > 7 ? 2 : 1);
     if(i % skip === 0 || p.isToday) {
-      const dt = new Date(p.d+"T00:00:00");
-      const dl = document.createElementNS("http://www.w3.org/2000/svg","text");
-      dl.setAttribute("x",cx); dl.setAttribute("y",CH+20);
-      dl.setAttribute("text-anchor","middle");
-      dl.setAttribute("fill", p.isToday ? C_TEXT_TODAY : C_TEXT_PAST);
-      dl.setAttribute("font-size","8");
+      const dt = new Date(p.d + "T00:00:00");
+      const dl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      dl.setAttribute("x", cx); dl.setAttribute("y", LH + CH + DH - 2);
+      dl.setAttribute("text-anchor", "middle");
+      dl.setAttribute("fill", p.isToday ? "#5DE0A8" : "#5A7065");
+      dl.setAttribute("font-size", "8");
       dl.textContent = dt.toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
       svg.appendChild(dl);
     }
   });
 
-  // Legend
-  const mkLegend = (x,y,col,label) => {
-    const r = document.createElementNS("http://www.w3.org/2000/svg","rect");
-    r.setAttribute("x",x); r.setAttribute("y",y-6);
-    r.setAttribute("width",10); r.setAttribute("height",6);
-    r.setAttribute("rx","2"); r.setAttribute("fill",col);
-    svg.appendChild(r);
-    const t = document.createElementNS("http://www.w3.org/2000/svg","text");
-    t.setAttribute("x",x+13); t.setAttribute("y",y);
-    t.setAttribute("fill","#5A7065"); t.setAttribute("font-size","8");
-    t.textContent = label;
-    svg.appendChild(t);
-  };
-  mkLegend(4, CH+38, "#1DB87F", "Sets done");
-  mkLegend(80, CH+38, C_GOAL_TODAY, "Daily goal");
-  mkLegend(156, CH+38, C_INCOMPLETE, "Remaining");
-
-  const scroller = document.createElement("div");
-  scroller.style.cssText = "overflow-x:auto;width:100%";
-  scroller.appendChild(svg);
-  wrap.appendChild(scroller);
+  const sc = document.createElement("div");
+  sc.style.cssText = "overflow-x:auto;width:100%";
+  sc.appendChild(svg);
+  wrap.appendChild(sc);
 }
 
 
@@ -994,26 +865,23 @@ document.getElementById("voice-btn").addEventListener("click",()=>{
   if(!voiceMuted) { qClear(); speakMantra("ॐ"); } else { qClear(); }
 });
 
-// CHART TAB BUTTONS
-document.querySelectorAll(".chart-tab").forEach(btn => {
+// CHART TABS — 7d / 14d / 21d day-window switchers
+document.querySelectorAll(".chart-tab[data-days]").forEach(btn => {
   btn.addEventListener("click", () => {
-    cfg.chartMode = btn.dataset.mode;
-    document.querySelectorAll(".chart-tab").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById("chart-title").textContent = "Last "+(cfg.chartDays||21)+" days";
+    cfg.chartDays = parseInt(btn.dataset.days) || 7;
+    syncChartUI();
     saveAll();
     renderBars();
   });
 });
 
-// CHART DAYS — update title when changed in settings
 function syncChartUI() {
-  const mode = cfg.chartMode || "bar";
-  document.querySelectorAll(".chart-tab").forEach(b => {
-    b.classList.toggle("active", b.dataset.mode === mode);
+  const days = cfg.chartDays || 7;
+  document.querySelectorAll(".chart-tab[data-days]").forEach(b => {
+    b.classList.toggle("active", parseInt(b.dataset.days) === days);
   });
   const t = document.getElementById("chart-title");
-  if(t) t.textContent = "Last "+(cfg.chartDays||21)+" days";
+  if(t) t.textContent = "Last "+days+" days progress";
 }
 
 // PACE BUTTONS — fix: always use integer, save immediately
