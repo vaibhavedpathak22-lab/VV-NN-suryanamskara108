@@ -334,13 +334,20 @@ footer p{font-size:9.5px;color:var(--muted)}
     </button>
   </div>
 
-  <!-- 7-day history chart -->
+  <!-- History chart -->
   <div class="hist">
-    <div class="htit">
-      Last 7 days
-      <span>bar = sets done / goal</span>
+    <div class="htit" style="margin-bottom:6px">
+      <span id="chart-title">Last 21 days</span>
+      <span style="font-size:9px;color:var(--muted)">sets / goal per day</span>
     </div>
-    <div class="bars" id="bars"></div>
+    <!-- Chart type tabs -->
+    <div class="chart-tabs" id="chart-tabs">
+      <button class="chart-tab active" data-mode="bar">▐▐ Bar</button>
+      <button class="chart-tab"        data-mode="line">╱ Line</button>
+      <button class="chart-tab"        data-mode="dot">• Dot</button>
+    </div>
+    <!-- Chart canvas -->
+    <div class="chart-wrap" id="chart-wrap"></div>
   </div>
 
   <footer><p id="status">Data saved on this device</p></footer>
@@ -418,6 +425,22 @@ footer p{font-size:9.5px;color:var(--muted)}
       <button class="tog on" id="tog-auto"></button>
     </div>
 
+    <div class="srow divider">
+      <label>📊 Chart history days (7 / 14 / 21)</label>
+      <select id="cfg-chart-days" style="background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);border-radius:8px;padding:6px 8px;font-size:13px">
+        <option value="7">7 days</option>
+        <option value="14">14 days</option>
+        <option value="21" selected>21 days</option>
+      </select>
+    </div>
+    <div class="srow">
+      <label>📈 Default chart type</label>
+      <select id="cfg-chart-mode" style="background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);border-radius:8px;padding:6px 8px;font-size:13px">
+        <option value="bar">▐▐ Bar</option>
+        <option value="line">╱ Line</option>
+        <option value="dot">• Dot</option>
+      </select>
+    </div>
     <div class="srow divider">
       <label>Program total sets (correct if needed)</label>
       <input type="number" id="cfg-lifetime" min="0" value="0" style="width:70px">

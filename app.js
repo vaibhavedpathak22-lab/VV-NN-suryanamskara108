@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v17";
+const KEY  = "surya-v18";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -31,6 +31,8 @@ let cfg = {
   autoOn        : true,
   poseSeconds   : 5,
   graceSeconds  : 5,
+  chartDays     : 21,   // history window: 7 / 14 / 21
+  chartMode     : "bar", // "bar" | "line" | "dot"
 };
 
 /* ── Data (persisted) ───────────────────────────────────────── */
@@ -658,63 +660,156 @@ function render() {
     dotsEl.appendChild(more);
   }
 
+  syncChartUI();
   renderBars();
 }
 
-/* ── 7-day chart ─────────────────────────────────────────────── */
+/* ── History chart — bar / line / dot ────────────────────────── */
 function renderBars() {
-  const el = document.getElementById("bars");
-  el.innerHTML = "";
-  const CHART_H = 48; // px — total bar column height
-  const days = [];
-  for(let i=6; i>=0; i--) days.push(dayKey(i));
-  const tk = todayKey();
+  const wrap = document.getElementById("chart-wrap");
+  if(!wrap) return;
+  wrap.innerHTML = "";
 
-  // Find max sets in window for scaling (minimum 1 to avoid divide-by-zero)
-  const maxSets = Math.max(1, ...days.map(d => (data.history[d]||{}).sets || 0));
+  const N      = cfg.chartDays || 21;
+  const mode   = cfg.chartMode || "bar";
+  const tk     = todayKey();
+  const days   = [];
+  for(let i=N-1; i>=0; i--) days.push(dayKey(i));
 
-  days.forEach(d => {
+  const CH = 90; // chart draw height in px
+  const PW = wrap.clientWidth || 320;
+  const colW = Math.max(12, Math.floor((PW - 8) / N));
+
+  // gather data
+  const pts = days.map(d => {
     const rec  = data.history[d] || {};
     const sets = rec.sets || 0;
     const goal = d === tk ? todayGoal() : (rec.goal || 0);
-    const isToday = d === tk;
+    return { d, sets, goal, isToday: d === tk };
+  });
+  const maxSets = Math.max(1, ...pts.map(p => p.sets));
 
-    // Bar height: scale by sets relative to maxSets in window
-    const h = sets > 0 ? Math.max(6, Math.round((sets / maxSets) * CHART_H)) : 3;
+  // ── SVG line / dot chart ─────────────────────────────────────
+  if(mode === "line" || mode === "dot") {
+    const SVG_W = Math.max(PW - 4, N * colW);
+    const SVG_H = CH + 38; // extra for labels
+    const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+    svg.setAttribute("width", SVG_W);
+    svg.setAttribute("height", SVG_H);
+    svg.style.overflow = "visible";
+    svg.style.display  = "block";
 
-    // Column wrapper
+    const xOf = i => Math.round(colW * i + colW / 2);
+    const yOf = v => Math.round(CH - (v / maxSets) * (CH - 10) + 4);
+
+    // Grid lines (light)
+    [0.25, 0.5, 0.75, 1].forEach(f => {
+      const gy = yOf(maxSets * f);
+      const gl = document.createElementNS("http://www.w3.org/2000/svg","line");
+      gl.setAttribute("x1",0); gl.setAttribute("x2",SVG_W);
+      gl.setAttribute("y1",gy); gl.setAttribute("y2",gy);
+      gl.setAttribute("stroke","#243328"); gl.setAttribute("stroke-width","1");
+      svg.appendChild(gl);
+    });
+
+    // Line path
+    if(mode === "line") {
+      const linePts = pts.map((p,i) => `${xOf(i)},${yOf(p.sets)}`).join(" ");
+      const poly = document.createElementNS("http://www.w3.org/2000/svg","polyline");
+      poly.setAttribute("points", linePts);
+      poly.setAttribute("fill","none");
+      poly.setAttribute("stroke","#1DB87F");
+      poly.setAttribute("stroke-width","2");
+      poly.setAttribute("stroke-linejoin","round");
+      poly.setAttribute("stroke-linecap","round");
+      svg.appendChild(poly);
+    }
+
+    // Dots + labels
+    pts.forEach((p, i) => {
+      const cx = xOf(i), cy = yOf(p.sets);
+      const col = p.isToday ? "#1DB87F" : (p.sets > 0 ? "#5DE0A8" : "#243328");
+
+      // dot circle
+      const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
+      c.setAttribute("cx", cx); c.setAttribute("cy", cy);
+      c.setAttribute("r", p.isToday ? 5 : 4);
+      c.setAttribute("fill", col);
+      svg.appendChild(c);
+
+      // value label above dot
+      if(p.sets > 0) {
+        const vt = document.createElementNS("http://www.w3.org/2000/svg","text");
+        vt.setAttribute("x", cx); vt.setAttribute("y", cy - 8);
+        vt.setAttribute("text-anchor","middle");
+        vt.setAttribute("fill", p.isToday ? "#5DE0A8" : "#5A7065");
+        vt.setAttribute("font-size","8");
+        vt.textContent = p.sets;
+        svg.appendChild(vt);
+      }
+
+      // day label below
+      const skip = N > 14 ? 2 : 1; // show every 2nd label when 21 days
+      if(i % skip === 0 || p.isToday) {
+        const dt = new Date(p.d + "T00:00:00");
+        const dl = document.createElementNS("http://www.w3.org/2000/svg","text");
+        dl.setAttribute("x", cx); dl.setAttribute("y", CH + 22);
+        dl.setAttribute("text-anchor","middle");
+        dl.setAttribute("fill", p.isToday ? "#5DE0A8" : "#5A7065");
+        dl.setAttribute("font-size","8");
+        dl.textContent = dt.toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
+        svg.appendChild(dl);
+      }
+    });
+
+    const scroller = document.createElement("div");
+    scroller.style.cssText = "overflow-x:auto;width:100%;padding-bottom:2px";
+    scroller.appendChild(svg);
+    wrap.appendChild(scroller);
+    return;
+  }
+
+  // ── BAR chart ────────────────────────────────────────────────
+  const flex = document.createElement("div");
+  flex.style.cssText = "display:flex;gap:3px;align-items:flex-end;width:100%;height:"+(CH+34)+"px;overflow-x:auto;padding-bottom:2px";
+
+  pts.forEach(p => {
+    const h = p.sets > 0 ? Math.max(8, Math.round((p.sets / maxSets) * CH)) : 4;
     const col = document.createElement("div");
-    col.style.cssText = "flex:1;display:flex;flex-direction:column;align-items:center;gap:2px";
+    col.style.cssText = "flex:0 0 "+colW+"px;display:flex;flex-direction:column;align-items:center;gap:0;justify-content:flex-end;height:"+(CH+34)+"px";
 
-    // Count label above bar (show sets/goal if goal known, else just sets)
+    // value label
     const cnt = document.createElement("div");
-    cnt.style.cssText = "font-size:9px;color:var(--muted);text-align:center;min-height:11px";
-    if(sets > 0) cnt.textContent = goal > 0 ? sets+"/"+goal : sets;
+    cnt.style.cssText = "font-size:"+(N>14?"8":"9")+"px;color:"+(p.isToday?"var(--acc-lt)":"var(--muted)")+";text-align:center;min-height:14px;line-height:14px;font-weight:700";
+    if(p.sets > 0) cnt.textContent = p.goal > 0 ? p.sets+"/"+p.goal : p.sets;
 
-    // Bar itself — simple div, height in px
+    // bar
     const bar = document.createElement("div");
     bar.style.cssText = [
       "width:100%",
       "border-radius:4px 4px 2px 2px",
-      "height:" + h + "px",
-      "background:" + (sets === 0 ? "var(--bdr)" : isToday ? "var(--acc)" : "var(--acc-lt)"),
-      "margin-top:auto",   // pushes bar to bottom of column
+      "height:"+h+"px",
+      "background:"+(p.sets===0?"var(--bdr)":p.isToday?"var(--acc)":"var(--acc-lt)"),
       "flex-shrink:0",
+      "margin-top:2px",
     ].join(";");
-    bar.title = sets + (goal>0 ? " / "+goal : "") + " sets";
 
-    // Day label below
+    // date label
+    const dt = new Date(p.d + "T00:00:00");
     const lbl = document.createElement("div");
-    lbl.style.cssText = "font-size:9px;text-align:center;color:" +
-      (isToday ? "var(--acc-lt)" : "var(--muted)");
-    lbl.textContent = new Date(d+"T00:00:00")
-      .toLocaleDateString(undefined, {weekday:"narrow"});
+    lbl.style.cssText = "font-size:"+(N>14?"7":"8")+"px;text-align:center;margin-top:4px;color:"+(p.isToday?"var(--acc-lt)":"var(--muted)");
+    const skip = N > 14 ? 3 : 1;
+    const idx  = pts.indexOf(p);
+    lbl.textContent = (idx % skip === 0 || p.isToday)
+      ? dt.toLocaleDateString(undefined,{month:"numeric",day:"numeric"}) : "";
 
     col.appendChild(cnt);
     col.appendChild(bar);
     col.appendChild(lbl);
-    el.appendChild(col);
+    flex.appendChild(col);
   });
+
+  wrap.appendChild(flex);
 }
 
 /* ── Controls ────────────────────────────────────────────────── */
@@ -726,6 +821,28 @@ document.getElementById("voice-btn").addEventListener("click",()=>{
   saveAll(); render();
   if(!voiceMuted) { qClear(); speakMantra("ॐ"); } else { qClear(); }
 });
+
+// CHART TAB BUTTONS
+document.querySelectorAll(".chart-tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    cfg.chartMode = btn.dataset.mode;
+    document.querySelectorAll(".chart-tab").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("chart-title").textContent = "Last "+(cfg.chartDays||21)+" days";
+    saveAll();
+    renderBars();
+  });
+});
+
+// CHART DAYS — update title when changed in settings
+function syncChartUI() {
+  const mode = cfg.chartMode || "bar";
+  document.querySelectorAll(".chart-tab").forEach(b => {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  });
+  const t = document.getElementById("chart-title");
+  if(t) t.textContent = "Last "+(cfg.chartDays||21)+" days";
+}
 
 // PACE BUTTONS — fix: always use integer, save immediately
 document.getElementById("spd-up").addEventListener("click",()=>{
@@ -780,6 +897,8 @@ function closeSettings() {
   cfg.breathOn  = togGet("tog-breath");
   cfg.autoOn    = togGet("tog-auto");
   voiceMuted    = !cfg.voiceOn;
+  cfg.chartDays = parseInt(document.getElementById("cfg-chart-days").value) || 21;
+  cfg.chartMode = document.getElementById("cfg-chart-mode").value || "bar";
   saveAll(); render();
   document.getElementById("dr").classList.remove("show");
 }
