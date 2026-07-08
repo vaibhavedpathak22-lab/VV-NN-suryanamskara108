@@ -338,16 +338,22 @@ footer p{font-size:9.5px;color:var(--muted)}
   <div class="hist">
     <div class="htit" style="margin-bottom:6px">
       <span id="chart-title">Last 21 days</span>
-      <span style="font-size:9px;color:var(--muted)">sets / goal per day</span>
+      <span style="font-size:9px;color:var(--muted)">green=done · dark=goal · amber=remaining</span>
     </div>
     <!-- Chart type tabs -->
     <div class="chart-tabs" id="chart-tabs">
       <button class="chart-tab active" data-mode="bar">▐▐ Bar</button>
       <button class="chart-tab"        data-mode="line">╱ Line</button>
-      <button class="chart-tab"        data-mode="dot">• Dot</button>
     </div>
     <!-- Chart canvas -->
     <div class="chart-wrap" id="chart-wrap"></div>
+    <!-- Legend -->
+    <div class="chart-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#1DB87F"></div>Sets done (today)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#5DE0A8"></div>Sets done (past)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#0F6E56"></div>Goal</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#E8A030"></div>Remaining</div>
+    </div>
   </div>
 
   <footer><p id="status">Data saved on this device</p></footer>
@@ -436,9 +442,8 @@ footer p{font-size:9.5px;color:var(--muted)}
     <div class="srow">
       <label>📈 Default chart type</label>
       <select id="cfg-chart-mode" style="background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);border-radius:8px;padding:6px 8px;font-size:13px">
-        <option value="bar">▐▐ Bar</option>
-        <option value="line">╱ Line</option>
-        <option value="dot">• Dot</option>
+        <option value="bar">▐▐ Bar chart</option>
+        <option value="line">╱ Line chart</option>
       </select>
     </div>
     <div class="srow divider">
