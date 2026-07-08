@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v16";
+const KEY  = "surya-v17";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -112,28 +112,77 @@ function setTodayGoal(n) {
 
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
-  // Try current key first, then migrate from older keys
-  const OLD_KEYS = ["surya-v14","surya-v13","surya-v12","surya-v11","surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5","surya-v4","surya-v3"];
+  const OLD_KEYS = [
+    "surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
+    "surya-v10","surya-v9","surya-v8","surya-v7","surya-v6",
+    "surya-v5","surya-v4","surya-v3","surya-v2","surya-v1"
+  ];
   try {
+    // Find best available saved data (current key first, then older)
     let raw = localStorage.getItem(KEY);
+    let migratedFrom = null;
     if(!raw) {
-      // Try to migrate from an older version
       for(const ok of OLD_KEYS) {
         const oldRaw = localStorage.getItem(ok);
-        if(oldRaw) { raw = oldRaw; console.log("Migrated from", ok); break; }
+        if(oldRaw) { raw = oldRaw; migratedFrom = ok; break; }
       }
     }
-    if(raw){ const sv=JSON.parse(raw); Object.assign(cfg,sv.cfg||{}); Object.assign(data,sv.data||{}); }
-    // Migrate old history format (plain number → object)
-    Object.keys(data.history).forEach(k=>{
-      if(typeof data.history[k]==="number")
-        data.history[k]={ sets: data.history[k], timeMs: 0 };
-    });
-  } catch(e){}
+
+    if(raw) {
+      const sv = JSON.parse(raw);
+
+      // Handle TWO old save formats:
+      // Format A (v3-v5): { history:{}, totalAllTime:0, programDay:1, lastDate:"" }  (flat)
+      // Format B (v6+):   { cfg:{...}, data:{...} }  (nested)
+      if(sv.data && typeof sv.data === "object") {
+        // Format B — nested
+        Object.assign(cfg,  sv.cfg  || {});
+        Object.assign(data, sv.data || {});
+      } else if(sv.history) {
+        // Format A — flat root
+        data.history      = sv.history      || {};
+        data.totalAllTime = sv.totalAllTime || 0;
+        data.totalTimeMs  = sv.totalTimeMs  || 0;
+        data.programDay   = sv.programDay   || 1;
+        data.lastDate     = sv.lastDate     || "";
+        data.baseGoal     = sv.baseGoal     || 0;
+        data.goalDate     = sv.goalDate     || "";
+        data.lastGoal     = sv.lastGoal     || 0;
+      }
+
+      // Migrate old history entries: plain number → object
+      Object.keys(data.history).forEach(k => {
+        const v = data.history[k];
+        if(typeof v === "number") data.history[k] = { sets: v, timeMs: 0, goal: 0 };
+        if(!data.history[k].timeMs) data.history[k].timeMs = 0;
+        if(!data.history[k].goal)   data.history[k].goal   = 0;
+      });
+
+      // Recompute totalAllTime from history if it looks wrong (0 but history has data)
+      const histTotal = Object.values(data.history).reduce((s,r)=> s+(r.sets||0), 0);
+      if(histTotal > 0 && data.totalAllTime === 0) {
+        data.totalAllTime = histTotal;
+        console.log("Recomputed totalAllTime from history:", histTotal);
+      }
+      // Recompute totalTimeMs from history if missing
+      const histTime = Object.values(data.history).reduce((s,r)=> s+(r.timeMs||0), 0);
+      if(histTime > 0 && data.totalTimeMs === 0) {
+        data.totalTimeMs = histTime;
+        console.log("Recomputed totalTimeMs from history:", histTime);
+      }
+
+      if(migratedFrom) {
+        console.log("Migrated data from", migratedFrom,
+          "| sets:", data.totalAllTime, "| timeMs:", data.totalTimeMs);
+        // Save under new key immediately so next load is fast
+        try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
+      }
+    }
+  } catch(e) { console.error("loadAll error:", e); }
+
   const today = todayKey();
   if(data.lastDate && data.lastDate !== today) {
     data.programDay = (data.programDay||1) + 1;
-    // Save yesterday's actual goal before clearing manual override
     const yRec = data.history[data.lastDate];
     if(yRec && yRec.goal) data.lastGoal = yRec.goal;
     data.baseGoal = 0;
@@ -752,8 +801,30 @@ let deferredPrompt=null;
 window.addEventListener("beforeinstallprompt",e=>{ e.preventDefault(); deferredPrompt=e;
   setStatus("Tap ⋮ → Add to Home Screen to install offline"); });
 window.addEventListener("appinstalled",()=>setStatus("App installed! Works offline ✓"));
-if("serviceWorker" in navigator)
-  window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(e=>console.warn(e)));
+if("serviceWorker" in navigator){
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("sw.js");
+      // Show update banner when new SW installs
+      const showBanner = () => {
+        const b = document.getElementById("upd-banner");
+        if(b) b.classList.add("show");
+      };
+      reg.addEventListener("updatefound", () => {
+        const nw = reg.installing;
+        nw.addEventListener("statechange", () => {
+          if(nw.state==="installed" && navigator.serviceWorker.controller) showBanner();
+        });
+      });
+      if(reg.waiting && navigator.serviceWorker.controller) showBanner();
+      // Auto-reload when new SW takes over
+      let refreshing=false;
+      navigator.serviceWorker.addEventListener("controllerchange",()=>{
+        if(!refreshing){refreshing=true;location.reload();}
+      });
+    } catch(e){ console.warn("SW:",e); }
+  });
+}
 
 /* ── Init ────────────────────────────────────────────────────── */
 loadAll();

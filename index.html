@@ -173,6 +173,11 @@ button:active{transform:scale(.95)}
 
 footer{text-align:center}
 footer p{font-size:9.5px;color:var(--muted)}
+/* update ready banner */
+.upd-banner{display:none;background:var(--acc-dim);border:1px solid var(--acc);
+  border-radius:10px;padding:8px 12px;text-align:center;font-size:12px;
+  color:var(--acc-lt);cursor:pointer;margin-top:4px;font-weight:600}
+.upd-banner.show{display:block}
 
 /* ── DND banner ── */
 .dnd-banner{
@@ -445,6 +450,9 @@ footer p{font-size:9.5px;color:var(--muted)}
   <button class="dnd-dismiss" id="dnd-dismiss">Got it</button>
 </div>
 
+<div class="upd-banner" id="upd-banner" onclick="location.reload(true)">
+  🔄 App updated — tap here to reload latest version
+</div>
 <script src="app.js"></script>
 </body>
 </html>
