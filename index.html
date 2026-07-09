@@ -155,6 +155,94 @@ button:active{transform:scale(.95)}
 .ov .ok{background:var(--acc);color:#06231A;font-size:15px;font-weight:700;
   padding:12px 32px;border-radius:var(--r);border:none;cursor:pointer}
 
+
+/* ═══ PRANAYAMA OVERLAY ═══ */
+.prana-ov{
+  display:none;
+  position:fixed;
+  top:0;left:0;right:0;bottom:0;
+  background:rgba(5,14,8,.98);
+  z-index:9999;
+  flex-direction:column;
+  align-items:center;
+  padding:env(safe-area-inset-top,1.2rem) 1rem env(safe-area-inset-bottom,1rem);
+  overflow-y:auto;
+  gap:.7rem;
+  -webkit-overflow-scrolling:touch;
+}
+.prana-ov.show{
+  display:flex !important;
+}
+.prana-header{
+  width:100%;max-width:420px;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.prana-badge{
+  font-size:10px;color:var(--muted);background:var(--surf);
+  padding:3px 9px;border-radius:20px;border:1px solid var(--bdr);
+}
+.prana-label{font-size:12px;font-weight:700;color:var(--acc-lt)}
+.prana-close-x{
+  background:none;border:none;color:var(--muted);
+  font-size:22px;cursor:pointer;line-height:1;padding:4px;
+}
+/* title */
+.prana-title-block{text-align:center;width:100%;max-width:420px}
+.prana-name-hi{
+  font-family:"Noto Sans Devanagari",serif;
+  font-size:28px;font-weight:900;display:block;
+  background:linear-gradient(135deg,#FFD700 0%,#5DE0A8 60%,#1DB87F 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;line-height:1.25;letter-spacing:.04em;
+}
+.prana-name-en{font-size:16px;font-weight:700;color:var(--txt2);margin-top:1px}
+.prana-desc-txt{font-size:11px;color:var(--muted);font-style:italic;margin-top:3px}
+/* progress */
+.prana-bars{width:100%;max-width:420px;display:flex;flex-direction:column;gap:5px}
+.pbar-row{display:flex;align-items:center;gap:8px}
+.pbar-lbl{font-size:9px;color:var(--muted);min-width:36px;text-transform:uppercase;letter-spacing:.04em}
+.pbar-track{flex:1;height:7px;background:var(--bdr);border-radius:4px;overflow:hidden}
+.pbar-fill{height:100%;border-radius:4px;background:var(--acc);width:0%;transition:width .5s linear}
+.pbar-fill.total{background:linear-gradient(90deg,#B8860B,#1DB87F)}
+.prana-time-rem{font-size:11px;color:var(--acc-lt);text-align:center}
+/* step card */
+.prana-step-card{
+  width:100%;max-width:420px;
+  background:var(--surf);border-radius:16px;border:1px solid var(--bdr);
+  padding:1.1rem 1.2rem;flex:1;min-height:110px;
+  display:flex;flex-direction:column;justify-content:center;gap:8px;
+}
+.prana-step-badge{
+  font-size:10px;color:var(--muted);font-weight:600;
+}
+.prana-step-txt{
+  font-size:16px;font-weight:600;color:var(--txt);
+  line-height:1.6;text-align:center;
+}
+/* controls */
+.prana-ctrl{display:flex;gap:8px;width:100%;max-width:420px}
+.prana-btn{
+  flex:1;height:50px;border-radius:14px;
+  font-size:14px;font-weight:700;border:none;cursor:pointer;
+  font-family:inherit;transition:transform .1s;
+}
+.prana-btn:active{transform:scale(.95)}
+.prana-btn.pause-btn{background:var(--surf);border:1.5px solid var(--acc);color:var(--acc-lt)}
+.prana-btn.skip-btn{
+  flex:0 0 90px;background:var(--surf2);
+  border:1px solid var(--bdr);color:var(--muted);font-size:12px;
+}
+/* manual start button */
+.prana-manual-btn{
+  width:100%;padding:11px;border-radius:13px;
+  background:linear-gradient(135deg,#0F2A1A,#1A3A25);
+  border:1.5px solid var(--acc);color:var(--acc-lt);
+  font-size:13px;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  font-family:inherit;
+}
+/* ═══ end pranayama ═══ */
+
 /* ── settings drawer ── */
 .dr{display:none;position:fixed;inset:0;z-index:90;align-items:flex-end}
 .dr.show{display:flex}
@@ -370,7 +458,7 @@ footer p{font-size:9.5px;color:var(--muted)}
 
   <!-- Manual Pranayama start -->
   <button class="prana-manual-btn" id="prana-start-btn">
-    🌬 Start Pranayama practice
+    🌬 Start Pranayama
   </button>
 
   <footer><p id="status">Data saved on this device</p></footer>
@@ -406,51 +494,52 @@ footer p{font-size:9.5px;color:var(--muted)}
   </button>
 </div>
 
-<!-- Pranayama overlay -->
+<!-- Pranayama overlay — full screen guided session -->
 <div class="prana-ov" id="prana-ov">
+
+  <!-- Top bar -->
   <div class="prana-header">
-    <span class="prana-phase-badge" id="prana-phase-num">Practice 1 of 6</span>
-    <span style="font-size:11px;color:var(--acc-lt);font-weight:700">🌬 Pranayama</span>
-    <button class="prana-close" id="prana-close-btn">✕</button>
+    <span class="prana-badge" id="prana-phase-num">Practice 1 of 6</span>
+    <span class="prana-label">🌬 Pranayama</span>
+    <button class="prana-close-x" id="prana-close-btn">✕</button>
   </div>
 
-  <!-- Phase title -->
+  <!-- Practice name (Hindi + English) -->
   <div class="prana-title-block">
-    <span class="prana-name-hi" id="prana-title-hi">दीर्घ श्वसन</span>
-    <div class="prana-name-en" id="prana-title">Deep Breathing</div>
-    <div class="prana-desc-txt" id="prana-desc">Slow deep belly breaths</div>
+    <span class="prana-name-hi"  id="prana-title-hi">दीर्घ श्वसन</span>
+    <div  class="prana-name-en"  id="prana-title">Deep Breathing</div>
+    <div  class="prana-desc-txt" id="prana-desc">Slow deep belly breaths</div>
   </div>
 
-  <!-- Progress bars -->
+  <!-- Phase + Total progress bars -->
   <div class="prana-bars">
     <div class="pbar-row">
       <div class="pbar-lbl">Phase</div>
-      <div class="pbar-track">
-        <div class="pbar-fill" id="prana-phase-bar"></div>
-      </div>
+      <div class="pbar-track"><div class="pbar-fill" id="prana-phase-bar"></div></div>
     </div>
     <div class="pbar-row">
       <div class="pbar-lbl">Total</div>
-      <div class="pbar-track">
-        <div class="pbar-fill total" id="prana-total-bar"></div>
-      </div>
+      <div class="pbar-track"><div class="pbar-fill total" id="prana-total-bar"></div></div>
     </div>
   </div>
 
-  <!-- Step instruction card -->
+  <!-- Step instruction card — main focus area -->
   <div class="prana-step-card">
-    <div class="prana-step-num" id="prana-step-num">Step 1</div>
-    <div class="prana-step-txt" id="prana-step">
-      Sit comfortably. Close your eyes. Begin.
+    <div class="prana-step-badge" id="prana-step-num">Step 1</div>
+    <div class="prana-step-txt"   id="prana-step">
+      Sit comfortably with spine erect. Close your eyes.
     </div>
-    <div class="prana-time-rem" id="prana-time-rem">–</div>
   </div>
+
+  <!-- Time remaining -->
+  <div class="prana-time-rem" id="prana-time-rem">–</div>
 
   <!-- Controls -->
   <div class="prana-ctrl">
-    <button class="prana-btn sec" id="prana-pause-btn">⏸ Pause</button>
-    <button class="prana-btn skip" id="prana-skip-btn">Skip ▶▶</button>
+    <button class="prana-btn pause-btn" id="prana-pause-btn">⏸ Pause</button>
+    <button class="prana-btn skip-btn"  id="prana-skip-btn">Skip ▶▶</button>
   </div>
+
 </div>
 
 <!-- Settings drawer -->

@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v23";
+const KEY  = "surya-v24";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -116,9 +116,10 @@ function setTodayGoal(n) {
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
   const OLD_KEYS = [
-    "surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
-    "surya-v10","surya-v9","surya-v8","surya-v7","surya-v6",
-    "surya-v5","surya-v4","surya-v3","surya-v2","surya-v1"
+    "surya-v24","surya-v22","surya-v21","surya-v20","surya-v19","surya-v18",
+    "surya-v17","surya-v16","surya-v15","surya-v14","surya-v13",
+    "surya-v12","surya-v11","surya-v10","surya-v9","surya-v8",
+    "surya-v7","surya-v6","surya-v5","surya-v4","surya-v3"
   ];
   try {
     // Find best available saved data (current key first, then older)
@@ -161,25 +162,29 @@ function loadAll() {
         if(!data.history[k].goal)   data.history[k].goal   = 0;
       });
 
-      // Recompute totalAllTime from history if it looks wrong (0 but history has data)
+      // Always recompute totals from history on migration to ensure accuracy
       const histTotal = Object.values(data.history).reduce((s,r)=> s+(r.sets||0), 0);
-      if(histTotal > 0 && data.totalAllTime === 0) {
-        data.totalAllTime = histTotal;
-        console.log("Recomputed totalAllTime from history:", histTotal);
+      if(histTotal > 0) {
+        // Use max of stored value and computed — handles partial saves
+        data.totalAllTime = Math.max(data.totalAllTime||0, histTotal);
       }
-      // Recompute totalTimeMs from history if missing
       const histTime = Object.values(data.history).reduce((s,r)=> s+(r.timeMs||0), 0);
-      if(histTime > 0 && data.totalTimeMs === 0) {
-        data.totalTimeMs = histTime;
-        console.log("Recomputed totalTimeMs from history:", histTime);
+      if(histTime > 0) {
+        data.totalTimeMs = Math.max(data.totalTimeMs||0, histTime);
+      }
+      // Ensure today's record exists with correct sets if it was saved mid-session
+      const todayRec = data.history[new Date().toISOString().slice(0,10)];
+      if(todayRec && typeof todayRec === "object") {
+        if(!todayRec.timeMs) todayRec.timeMs = 0;
+        if(!todayRec.goal)   todayRec.goal   = 0;
       }
 
+      // Always save under current key (ensures next load is fast even without migration)
       if(migratedFrom) {
-        console.log("Migrated data from", migratedFrom,
-          "| sets:", data.totalAllTime, "| timeMs:", data.totalTimeMs);
-        // Save under new key immediately so next load is fast
-        try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
+        console.log("Migrated from", migratedFrom,
+          "| sets:", data.totalAllTime, "| time:", data.totalTimeMs);
       }
+      try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
     }
   } catch(e) { console.error("loadAll error:", e); }
 
@@ -1046,13 +1051,17 @@ function computePhaseDurations(totalMin) {
 }
 
 function showPranayama() {
-  pranaState.phaseDurs = computePhaseDurations(cfg.pranayamaMinutes || 20);
-  pranaState.phaseIdx  = 0;
-  pranaState.stepIdx   = 0;
-  pranaState.active    = true;
-  pranaState.paused    = false;
-  pranaState.totalStart= Date.now();
-  document.getElementById("prana-ov").classList.add("show");
+  pranaState.phaseDurs  = computePhaseDurations(cfg.pranayamaMinutes || 20);
+  pranaState.phaseIdx   = 0;
+  pranaState.stepIdx    = 0;
+  pranaState.active     = true;
+  pranaState.paused     = false;
+  pranaState.totalStart = Date.now();
+  // Show full-screen overlay
+  const ov = document.getElementById("prana-ov");
+  ov.classList.add("show");
+  // Scroll to top of overlay
+  ov.scrollTop = 0;
   acquireWakeLock();
   startPranaPhase();
 }
@@ -1202,7 +1211,9 @@ function skipPranaPhase() {
 function closePranayama() {
   clearPranaTimers();
   pranaState.active = false;
+  pranaState.paused = false;
   releaseWakeLock();
+  qClear();
   document.getElementById("prana-ov").classList.remove("show");
 }
 

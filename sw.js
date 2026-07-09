@@ -1,7 +1,7 @@
-/* Service Worker — surya-v23
+/* Service Worker — surya-v24
    Forces immediate activation so new files are served right away.
    Cache-busted by version string in cache name. */
-const C = "surya-v23";
+const C = "surya-v24";
 const A = [
   "./", "./index.html", "./app.js", "./manifest.json",
   "./icon-192.png", "./icon-512.png",
