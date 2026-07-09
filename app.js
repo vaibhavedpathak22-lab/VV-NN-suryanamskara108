@@ -17,11 +17,11 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v20";
+const KEY  = "surya-v23";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
-  programName   : "Vaibhav's SuryaNamskara Challenge 108",
+  programName   : "वैभव - सूर्यसारथी.१ॐ८",
   dailyIncrease : 4,
   maxSets       : 108,
   breakEvery    : 12,
@@ -45,6 +45,7 @@ let data = {
   baseGoal      : 0,    // today's goal (editable); 0 = auto from programDay
   goalDate      : "",   // date baseGoal was set for; resets +4 on new day
   lastGoal      : 0,    // goal of last completed day — used for exact +4 calc
+  lastRecoveryAt: 0,    // totalAllTime count at which last recovery was triggered
 };
 
 /* ── Session (runtime) ──────────────────────────────────────── */
@@ -184,9 +185,36 @@ function loadAll() {
 
   const today = todayKey();
   if(data.lastDate && data.lastDate !== today) {
-    data.programDay = (data.programDay||1) + 1;
-    const yRec = data.history[data.lastDate];
-    if(yRec && yRec.goal) data.lastGoal = yRec.goal;
+    // Count actual calendar days elapsed (handles multi-day skips)
+    const last = new Date(data.lastDate + "T00:00:00");
+    const now  = new Date(today         + "T00:00:00");
+    const daysMissed = Math.max(1, Math.round((now - last) / 86400000));
+
+    // Advance programDay by days elapsed so goal progression stays correct
+    data.programDay = (data.programDay||1) + daysMissed;
+
+    // For each skipped day in the gap — insert a 0-sets record with the goal
+    // that was due that day, so the 21-day chart shows honest gaps
+    for(let d = 1; d < daysMissed; d++) {
+      const skipDate = new Date(last.getTime() + d * 86400000)
+        .toISOString().slice(0, 10);
+      if(!data.history[skipDate]) {
+        const skipGoal = Math.min(
+          (data.lastGoal || 0) + d * cfg.dailyIncrease,
+          cfg.maxSets
+        );
+        data.history[skipDate] = { sets: 0, timeMs: 0, goal: skipGoal };
+      }
+    }
+
+    // Save lastGoal — walk back to find the last day actually practiced
+    for(let d = 1; d <= daysMissed + 1; d++) {
+      const check = new Date(now.getTime() - d * 86400000)
+        .toISOString().slice(0, 10);
+      const rec = data.history[check];
+      if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
+    }
+
     data.baseGoal = 0;
     data.goalDate = "";
   }
@@ -436,14 +464,26 @@ function completeSet() {
 
   const done=todayDone(), goal=todayGoal();
   // Speak: Om (Sanskrit) then "Round N" in English
-  // Queue: Om (Sanskrit) → "Round N" (English) — played back-to-back
   setTimeout(()=>{
-    qClear();                           // cancel any leftover pose speech
+    qClear();
     qSpeak(makeMantraUtt("ॐ"));
     qSpeak(makeEnUtt("Round " + done));
   }, 300);
 
-  // Break reminder
+  // ── Recovery milestone: every 400 sets ──────────────────────
+  const RECOVERY_EVERY = 400;
+  const lastRecov = data.lastRecoveryAt || 0;
+  if(data.totalAllTime > 0 &&
+     data.totalAllTime % RECOVERY_EVERY === 0 &&
+     data.totalAllTime !== lastRecov) {
+    data.lastRecoveryAt = data.totalAllTime;
+    saveAll();
+    finishSession(false);
+    setTimeout(()=>showRecovery(data.totalAllTime), 400);
+    return;
+  }
+
+  // Break reminder (every N sets within session)
   if(sess.breakAcc>0 && sess.breakAcc%cfg.breakEvery===0) {
     finishSession(false);
     setTimeout(()=>showBreak(done), 400);
@@ -535,9 +575,12 @@ function finishSession(goalDone) {
     const todaySets  = todayDone();
     const totalSets  = data.totalAllTime;
     const msg = "Namaste! Today's target of " + todaySets + " rounds complete. "
-              + "Today total: " + todaySets + " rounds. "
-              + "All time total: " + totalSets + " rounds. Well done!";
+              + "All time total: " + totalSets + " rounds. "
+              + "Now let us begin Pranayama practice.";
     setTimeout(()=>speakText(msg), 800);
+    if(cfg.pranayamaAuto) {
+      setTimeout(()=>showPranayama(), 3500);
+    }
   }
   render(); updateClockDisplay();
 }
@@ -570,9 +613,30 @@ function showBreak(n) {
   document.getElementById("break-n").textContent=n;
   document.getElementById("break-ov").classList.add("show");
 }
+
+function showRecovery(total) {
+  vib([60,40,60,40,120]);
+  speakText(
+    "Congratulations! You have completed " + total + " Surya Namaskaras. " +
+    "This is a major milestone. Take a full recovery day tomorrow. " +
+    "Rest, hydrate, and let your body absorb the practice. Om Shanti."
+  );
+  document.getElementById("rec-total").textContent = total;
+  // compute next milestone
+  const RECOVERY_EVERY = 400;
+  document.getElementById("rec-next").textContent = total + RECOVERY_EVERY;
+  document.getElementById("rec-ov").classList.add("show");
+}
 document.getElementById("break-ok").addEventListener("click",()=>{
   document.getElementById("break-ov").classList.remove("show");
-  // Reset session timer for next block
+  sess.sessionStart=0; sess.sessionPaused=0;
+  render(); updateClockDisplay();
+});
+
+document.getElementById("rec-ok").addEventListener("click",()=>{
+  document.getElementById("rec-ov").classList.remove("show");
+  sess.active=false; sess.step=-1;
+  document.getElementById("main-label").textContent="▶ Start";
   sess.sessionStart=0; sess.sessionPaused=0;
   render(); updateClockDisplay();
 });
@@ -588,7 +652,7 @@ function render() {
   document.getElementById("s-total").textContent  = data.totalAllTime;
 
   // Program name + day
-  document.getElementById("prog-name").textContent = cfg.programName;
+  document.getElementById("prog-name").textContent = "वैभव - सूर्यसारथी.१ॐ८";
   const d=new Date();
   document.getElementById("day-label").textContent =
     "Day "+data.programDay+" · "+d.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"});
@@ -855,6 +919,293 @@ function _drawChart() {
 }
 
 
+
+/* ═══════════════════════════════════════════════════════════════
+   PRANAYAMA MODULE
+   Sequence: Deep Breathing → Anulom Vilom → Nadi Shodhana
+             → Kapalabhati → Bhramari → Meditation
+   Total time is distributed proportionally to cfg.pranayamaMinutes
+═══════════════════════════════════════════════════════════════ */
+
+// Base proportions (add to 100)
+const PRANAYAMA_BASE = [
+  {
+    id:"deep",
+    name:"Deep Breathing",
+    nameHi:"दीर्घ श्वसन",
+    ratio:10,   // 10% of total time
+    desc:"Slow deep belly breaths to prepare the body",
+    steps:[
+      { text:"Sit comfortably with spine erect. Close your eyes.", dur:8 },
+      { text:"Breathe in slowly through both nostrils for 4 counts.", dur:6 },
+      { text:"Hold the breath gently for 2 counts.", dur:4 },
+      { text:"Exhale slowly for 6 counts. Feel the belly fall.", dur:8 },
+      { text:"Continue this deep rhythmic breathing.", dur:0 }, // loops
+    ],
+    inhale:4, hold:2, exhale:6, rounds:-1, // -1 = time-based
+  },
+  {
+    id:"anulom",
+    name:"Anulom Vilom",
+    nameHi:"अनुलोम विलोम",
+    ratio:32,
+    desc:"Alternate nostril breathing — balances left and right energy channels",
+    steps:[
+      { text:"Right hand in Nasagra mudra. Close right nostril with thumb.", dur:6 },
+      { text:"Inhale through LEFT nostril for 4 counts.", dur:5 },
+      { text:"Close both nostrils. Hold for 2 counts.", dur:4 },
+      { text:"Release right nostril. Exhale through RIGHT for 8 counts.", dur:9 },
+      { text:"Inhale through RIGHT nostril for 4 counts.", dur:5 },
+      { text:"Close both. Hold for 2 counts.", dur:4 },
+      { text:"Release left nostril. Exhale through LEFT for 8 counts.", dur:9 },
+      { text:"This completes one round. Continue.", dur:0 },
+    ],
+    inhale:4, hold:2, exhale:8, rounds:-1,
+  },
+  {
+    id:"nadi",
+    name:"Nadi Shodhana",
+    nameHi:"नाडी शोधन",
+    ratio:18,
+    desc:"Purification of energy channels — deeper ratio 1:4:2",
+    steps:[
+      { text:"Nadi Shodhana — extended ratio. Inhale through LEFT for 4 counts.", dur:5 },
+      { text:"Retain breath with both nostrils closed for 16 counts.", dur:17 },
+      { text:"Exhale through RIGHT nostril for 8 counts.", dur:9 },
+      { text:"Inhale RIGHT for 4 counts.", dur:5 },
+      { text:"Retain for 16 counts.", dur:17 },
+      { text:"Exhale LEFT for 8 counts.", dur:9 },
+      { text:"One round complete. Continue gently.", dur:0 },
+    ],
+    inhale:4, hold:16, exhale:8, rounds:-1,
+  },
+  {
+    id:"kapalabhati",
+    name:"Kapalabhati",
+    nameHi:"कपालभाती",
+    ratio:12,
+    desc:"Skull-shining breath — forceful exhales, passive inhales",
+    steps:[
+      { text:"Sit tall. Take one deep breath in to prepare.", dur:5 },
+      { text:"Forceful sharp exhale through nose — pull navel in fast.", dur:3 },
+      { text:"Passive inhale — let breath come in naturally.", dur:2 },
+      { text:"Continue at a steady rhythmic pace — one stroke per second.", dur:0 },
+      { text:"After 30 strokes, take a deep breath and retain briefly.", dur:8 },
+      { text:"Exhale slowly. Rest. Begin next round when ready.", dur:6 },
+    ],
+    rounds:3, strokesPerRound:30, // 3 rounds of 30 strokes
+  },
+  {
+    id:"bhramari",
+    name:"Bhramari",
+    nameHi:"भ्रामरी",
+    ratio:15,
+    desc:"Humming bee breath — calms the nervous system",
+    steps:[
+      { text:"Close ears with thumbs, eyes with index fingers gently.", dur:6 },
+      { text:"Take a deep inhale through both nostrils.", dur:5 },
+      { text:"On exhale, make a soft humming sound — like a bee. Mmmmm.", dur:8 },
+      { text:"Feel the vibration in your skull and chest.", dur:5 },
+      { text:"Inhale again and repeat the humming exhale.", dur:0 },
+    ],
+    rounds:5,
+  },
+  {
+    id:"meditation",
+    name:"Quiet Meditation",
+    nameHi:"ध्यान",
+    ratio:13,
+    desc:"Silent awareness — let breath flow naturally",
+    steps:[
+      { text:"Release all techniques. Rest your hands on your knees.", dur:6 },
+      { text:"Observe the natural breath without controlling it.", dur:8 },
+      { text:"If thoughts arise, gently return attention to the breath.", dur:8 },
+      { text:"Rest in pure awareness. You are the witness.", dur:0 },
+    ],
+    rounds:-1,
+  },
+];
+
+// Runtime state
+let pranaState = {
+  active      : false,
+  paused      : false,
+  phaseIdx    : 0,    // which pranayama (0–5)
+  stepIdx     : 0,    // which step within phase
+  phaseStart  : 0,    // Date.now() when phase started
+  totalStart  : 0,    // Date.now() when session started
+  stepTimer   : null,
+  clockTimer  : null,
+  phaseDurs   : [],   // computed ms for each phase
+};
+
+function computePhaseDurations(totalMin) {
+  const totalMs = totalMin * 60 * 1000;
+  const total   = PRANAYAMA_BASE.reduce((s,p)=>s+p.ratio, 0);
+  return PRANAYAMA_BASE.map(p => Math.round((p.ratio / total) * totalMs));
+}
+
+function showPranayama() {
+  pranaState.phaseDurs = computePhaseDurations(cfg.pranayamaMinutes || 20);
+  pranaState.phaseIdx  = 0;
+  pranaState.stepIdx   = 0;
+  pranaState.active    = true;
+  pranaState.paused    = false;
+  pranaState.totalStart= Date.now();
+  document.getElementById("prana-ov").classList.add("show");
+  acquireWakeLock();
+  startPranaPhase();
+}
+
+function startPranaPhase() {
+  const phase = PRANAYAMA_BASE[pranaState.phaseIdx];
+  pranaState.phaseStart = Date.now();
+  pranaState.stepIdx    = 0;
+
+  // Update header
+  const totalMin = cfg.pranayamaMinutes || 20;
+  document.getElementById("prana-title").textContent  = phase.name;
+  document.getElementById("prana-title-hi").textContent = phase.nameHi;
+  document.getElementById("prana-desc").textContent   = phase.desc;
+  document.getElementById("prana-phase-num").textContent =
+    "Practice " + (pranaState.phaseIdx+1) + " of " + PRANAYAMA_BASE.length;
+
+  // Phase progress bar reset
+  document.getElementById("prana-phase-bar").style.width = "0%";
+
+  speakText(phase.name + ". " + phase.desc, 200);
+  setTimeout(()=>startPranaStep(), 2000);
+  startPranaClocks();
+}
+
+function startPranaStep() {
+  if(!pranaState.active || pranaState.paused) return;
+  clearPranaTimers();
+
+  const phase    = PRANAYAMA_BASE[pranaState.phaseIdx];
+  const steps    = phase.steps;
+  const stepIdx  = pranaState.stepIdx;
+  const step     = steps[stepIdx];
+  const phaseDur = pranaState.phaseDurs[pranaState.phaseIdx];
+
+  // Update UI
+  document.getElementById("prana-step").textContent  = step.text;
+  document.getElementById("prana-step-num").textContent =
+    "Step " + (stepIdx+1) + " / " + steps.length;
+
+  // Speak the instruction
+  speakText(step.text);
+
+  // If step.dur === 0 → looping step — run until phase time expires
+  if(step.dur === 0) {
+    // Keep cycling steps from beginning (loop)
+    pranaState.stepTimer = setInterval(()=>{
+      if(!pranaState.active || pranaState.paused) return;
+      // Check if phase time is up
+      const elapsed = Date.now() - pranaState.phaseStart;
+      if(elapsed >= phaseDur) { nextPranaPhase(); return; }
+      // Loop from step 0
+      pranaState.stepIdx = 0;
+      startPranaStep();
+    }, 10000); // re-announce every 10s during loop
+    return;
+  }
+
+  // Timed step
+  pranaState.stepTimer = setTimeout(()=>{
+    const elapsed = Date.now() - pranaState.phaseStart;
+    if(elapsed >= phaseDur) { nextPranaPhase(); return; }
+    // Advance to next step (or loop)
+    pranaState.stepIdx = (stepIdx + 1) % steps.length;
+    startPranaStep();
+  }, step.dur * 1000);
+}
+
+function startPranaClocks() {
+  clearInterval(pranaState.clockTimer);
+  pranaState.clockTimer = setInterval(()=>{
+    if(!pranaState.active || pranaState.paused) return;
+    const phaseMs   = pranaState.phaseDurs[pranaState.phaseIdx] || 1;
+    const phaseEl   = Date.now() - pranaState.phaseStart;
+    const phaseFrac = Math.min(1, phaseEl / phaseMs);
+    const totalMs   = (cfg.pranayamaMinutes||20) * 60000;
+    const totalEl   = Date.now() - pranaState.totalStart;
+    const totalFrac = Math.min(1, totalEl / totalMs);
+    const remSec    = Math.max(0, Math.round((totalMs - totalEl) / 1000));
+
+    document.getElementById("prana-phase-bar").style.width = (phaseFrac*100)+"%";
+    document.getElementById("prana-total-bar").style.width = (totalFrac*100)+"%";
+    document.getElementById("prana-time-rem").textContent  =
+      "Total remaining: " + fmtTime(remSec * 1000);
+  }, 500);
+}
+
+function nextPranaPhase() {
+  clearPranaTimers();
+  pranaState.phaseIdx++;
+  if(pranaState.phaseIdx >= PRANAYAMA_BASE.length) {
+    endPranayama(); return;
+  }
+  speakText("Excellent. Now we begin " + PRANAYAMA_BASE[pranaState.phaseIdx].name + ".", 300);
+  setTimeout(()=>startPranaPhase(), 2500);
+}
+
+function endPranayama() {
+  clearPranaTimers();
+  pranaState.active = false;
+  releaseWakeLock();
+  speakText(
+    "Pranayama complete. Sit quietly for a moment. " +
+    "Feel the stillness within. Namaste. Om Shanti Shanti Shanti.",
+    400
+  );
+  document.getElementById("prana-step").textContent    = "🙏 Practice complete. Namaste.";
+  document.getElementById("prana-title").textContent   = "ध्यान";
+  document.getElementById("prana-phase-bar").style.width = "100%";
+  document.getElementById("prana-total-bar").style.width = "100%";
+  document.getElementById("prana-time-rem").textContent  = "Complete!";
+  document.getElementById("prana-close-btn").textContent = "✕ Close";
+}
+
+function clearPranaTimers() {
+  if(pranaState.stepTimer) {
+    clearTimeout(pranaState.stepTimer);
+    clearInterval(pranaState.stepTimer);
+    pranaState.stepTimer = null;
+  }
+  clearInterval(pranaState.clockTimer);
+}
+
+function pauseResumePrana() {
+  if(!pranaState.active) return;
+  pranaState.paused = !pranaState.paused;
+  const btn = document.getElementById("prana-pause-btn");
+  if(pranaState.paused) {
+    clearPranaTimers();
+    btn.textContent = "▶ Resume";
+    speakText("Paused.");
+  } else {
+    btn.textContent = "⏸ Pause";
+    pranaState.phaseStart = Date.now() -
+      (pranaState.phaseDurs[pranaState.phaseIdx] * 0.05); // small overlap on resume
+    startPranaStep();
+    startPranaClocks();
+  }
+}
+
+function skipPranaPhase() {
+  if(!pranaState.active) return;
+  clearPranaTimers();
+  nextPranaPhase();
+}
+
+function closePranayama() {
+  clearPranaTimers();
+  pranaState.active = false;
+  releaseWakeLock();
+  document.getElementById("prana-ov").classList.remove("show");
+}
+
 /* ── Controls ────────────────────────────────────────────────── */
 document.getElementById("main-btn").addEventListener("click", handleMainBtn);
 document.getElementById("reset-btn").addEventListener("click", resetSession);
@@ -904,7 +1255,6 @@ document.querySelector(".ring-wrap").addEventListener("click",()=>{
 
 /* ── Settings ────────────────────────────────────────────────── */
 function openSettings() {
-  document.getElementById("cfg-name").value     = cfg.programName;
   document.getElementById("cfg-inc").value      = cfg.dailyIncrease;
   document.getElementById("cfg-goal").value     = todayGoal();
   document.getElementById("cfg-max").value      = cfg.maxSets;
@@ -916,13 +1266,14 @@ function openSettings() {
   togSet("tog-mantras", cfg.mantrasOn !== false);
   togSet("tog-breath",  cfg.breathOn  !== false);
   togSet("tog-auto",    cfg.autoOn);
+  togSet("tog-prana",   cfg.pranayamaAuto !== false);
+  document.getElementById("cfg-prana-min").value = cfg.pranayamaMinutes || 20;
   document.getElementById("cfg-voice-info").textContent =
     hiVoice ? "Active: "+hiVoice.name+" ("+hiVoice.lang+")"
             : "No hi-IN voice — install Hindi TTS in Android Settings → Language → Text-to-speech.";
   document.getElementById("dr").classList.add("show");
 }
 function closeSettings() {
-  cfg.programName   = document.getElementById("cfg-name").value.trim() || cfg.programName;
   cfg.dailyIncrease = parseInt(document.getElementById("cfg-inc").value) || 4;
   const newGoal = parseInt(document.getElementById("cfg-goal").value) || 0;
   if(newGoal > 0) setTodayGoal(newGoal);  // always anchor programDay when user sets a goal
@@ -932,11 +1283,13 @@ function closeSettings() {
   cfg.graceSeconds  = Math.max(0, Math.min(30, parseInt(document.getElementById("cfg-grace").value)||5));
   const lt=parseInt(document.getElementById("cfg-lifetime").value);
   if(!isNaN(lt)&&lt>=0) data.totalAllTime=lt;
-  cfg.voiceOn   = togGet("tog-voice");
-  cfg.mantrasOn = togGet("tog-mantras");
-  cfg.breathOn  = togGet("tog-breath");
-  cfg.autoOn    = togGet("tog-auto");
-  voiceMuted    = !cfg.voiceOn;
+  cfg.voiceOn          = togGet("tog-voice");
+  cfg.mantrasOn        = togGet("tog-mantras");
+  cfg.breathOn         = togGet("tog-breath");
+  cfg.autoOn           = togGet("tog-auto");
+  cfg.pranayamaAuto    = togGet("tog-prana");
+  cfg.pranayamaMinutes = parseInt(document.getElementById("cfg-prana-min").value)||20;
+  voiceMuted           = !cfg.voiceOn;
   cfg.chartDays = parseInt(document.getElementById("cfg-chart-days").value) || 21;
   cfg.chartMode = document.getElementById("cfg-chart-mode").value || "bar";
   saveAll(); render();
@@ -944,7 +1297,7 @@ function closeSettings() {
 }
 const togSet=(id,on)=>document.getElementById(id).classList.toggle("on",on);
 const togGet=id=>document.getElementById(id).classList.contains("on");
-["tog-voice","tog-mantras","tog-breath","tog-auto"].forEach(id=>{
+["tog-voice","tog-mantras","tog-breath","tog-auto","tog-prana"].forEach(id=>{
   const el = document.getElementById(id);
   if(el) el.addEventListener("click",function(){this.classList.toggle("on");});
 });

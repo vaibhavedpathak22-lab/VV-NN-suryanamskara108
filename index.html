@@ -9,6 +9,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Surya Namaskara">
 <title>Surya Namaskara</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@700;900&display=swap">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -30,8 +32,16 @@ body{display:flex;flex-direction:column;align-items:center;
 
 /* ── header ── */
 header{display:flex;justify-content:space-between;align-items:flex-start}
-.prog-name{font-size:13px;font-weight:700;color:var(--acc-lt);letter-spacing:.01em;
-  max-width:260px;line-height:1.3}
+.prog-name{
+  font-family:"Noto Sans Devanagari","Mangal",serif;
+  font-size:22px;font-weight:900;letter-spacing:.04em;
+  line-height:1.25;max-width:270px;
+  background:linear-gradient(135deg,#FFD700 0%,#5DE0A8 55%,#1DB87F 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+  text-shadow:none;
+  filter:drop-shadow(0 1px 6px rgba(29,184,127,0.35));
+}
 #day-label{font-size:10px;color:var(--muted);margin-top:1px}
 .gear{background:none;border:none;color:var(--muted);padding:4px;cursor:pointer;
   display:flex;flex-shrink:0}
@@ -217,7 +227,7 @@ footer p{font-size:9.5px;color:var(--muted)}
   <!-- Header: program name + gear -->
   <header>
     <div>
-      <div class="prog-name" id="prog-name">Surya Namaskara</div>
+      <div class="prog-name" id="prog-name">वैभव - सूर्यसारथी.१ॐ८</div>
       <div id="day-label">Loading…</div>
     </div>
     <button class="gear" id="settings-btn" aria-label="Settings">
@@ -358,6 +368,11 @@ footer p{font-size:9.5px;color:var(--muted)}
 
   </div>
 
+  <!-- Manual Pranayama start -->
+  <button class="prana-manual-btn" id="prana-start-btn">
+    🌬 Start Pranayama practice
+  </button>
+
   <footer><p id="status">Data saved on this device</p></footer>
 </div>
 
@@ -371,6 +386,73 @@ footer p{font-size:9.5px;color:var(--muted)}
   <button class="ok" id="break-ok">I'm rested — Continue</button>
 </div>
 
+<!-- Recovery Day Overlay — shown at every 400 sets -->
+<div class="ov" id="rec-ov">
+  <div class="rec-badge">🏆</div>
+  <div class="rec-counter" id="rec-total">400</div>
+  <h2 style="font-size:18px;margin-top:-4px">सूर्यसारथी मैलस्टोन!</h2>
+  <p style="font-size:14px;font-weight:600;color:var(--acc-lt)">Recovery Day Tomorrow</p>
+  <div class="rec-tips">
+    <p>Complete rest — no Surya Namaskara</p>
+    <p>Gentle walk or light stretching only</p>
+    <p>Stay hydrated, eat well, sleep early</p>
+    <p>Let muscles repair and grow stronger</p>
+  </div>
+  <p style="font-size:11px;color:var(--muted);margin-top:-4px">
+    Next milestone: <strong id="rec-next" style="color:var(--acc-lt)">800</strong> sets
+  </p>
+  <button class="ok" id="rec-ok" style="background:linear-gradient(135deg,#B8860B,#1DB87F);">
+    ॐ शान्तिः — I will rest tomorrow
+  </button>
+</div>
+
+<!-- Pranayama overlay -->
+<div class="prana-ov" id="prana-ov">
+  <div class="prana-header">
+    <span class="prana-phase-badge" id="prana-phase-num">Practice 1 of 6</span>
+    <span style="font-size:11px;color:var(--acc-lt);font-weight:700">🌬 Pranayama</span>
+    <button class="prana-close" id="prana-close-btn">✕</button>
+  </div>
+
+  <!-- Phase title -->
+  <div class="prana-title-block">
+    <span class="prana-name-hi" id="prana-title-hi">दीर्घ श्वसन</span>
+    <div class="prana-name-en" id="prana-title">Deep Breathing</div>
+    <div class="prana-desc-txt" id="prana-desc">Slow deep belly breaths</div>
+  </div>
+
+  <!-- Progress bars -->
+  <div class="prana-bars">
+    <div class="pbar-row">
+      <div class="pbar-lbl">Phase</div>
+      <div class="pbar-track">
+        <div class="pbar-fill" id="prana-phase-bar"></div>
+      </div>
+    </div>
+    <div class="pbar-row">
+      <div class="pbar-lbl">Total</div>
+      <div class="pbar-track">
+        <div class="pbar-fill total" id="prana-total-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step instruction card -->
+  <div class="prana-step-card">
+    <div class="prana-step-num" id="prana-step-num">Step 1</div>
+    <div class="prana-step-txt" id="prana-step">
+      Sit comfortably. Close your eyes. Begin.
+    </div>
+    <div class="prana-time-rem" id="prana-time-rem">–</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="prana-ctrl">
+    <button class="prana-btn sec" id="prana-pause-btn">⏸ Pause</button>
+    <button class="prana-btn skip" id="prana-skip-btn">Skip ▶▶</button>
+  </div>
+</div>
+
 <!-- Settings drawer -->
 <div class="dr" id="dr">
   <div class="dr-bg" id="dr-bg"></div>
@@ -380,11 +462,14 @@ footer p{font-size:9.5px;color:var(--muted)}
       <button class="dr-close" id="dr-close">✕</button>
     </div>
 
-    <!-- Program name -->
-    <div class="srow">
-      <label style="flex:0 0 auto;margin-right:8px">Program name</label>
+    <!-- Program name (hardcoded) -->
+    <div style="background:var(--surf2);border-radius:9px;padding:9px 12px;
+         font-family:'Noto Sans Devanagari',serif;font-size:16px;font-weight:800;
+         background:linear-gradient(135deg,#FFD700,#5DE0A8);
+         -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+         background-clip:text;letter-spacing:.04em;">
+      वैभव - सूर्यसारथी.१ॐ८
     </div>
-    <input type="text" id="cfg-name" placeholder="Program name" style="width:100%;padding:8px 10px;border-radius:9px;background:var(--surf2);border:1px solid var(--bdr);color:var(--txt);font-size:13px">
 
     <!-- Pace (also editable here) -->
     <div class="srow divider">
@@ -411,6 +496,14 @@ footer p{font-size:9.5px;color:var(--muted)}
     <div class="srow">
       <label>Break reminder every N sets</label>
       <input type="number" id="cfg-brk" min="1" max="108" value="12">
+    </div>
+    <div class="srow divider">
+      <label>🌬 Pranayama duration (10–30 min)</label>
+      <input type="number" id="cfg-prana-min" min="10" max="30" value="20">
+    </div>
+    <div class="srow">
+      <label>🌬 Auto-start Pranayama after goal</label>
+      <button class="tog on" id="tog-prana"></button>
     </div>
 
     <div class="srow divider">
