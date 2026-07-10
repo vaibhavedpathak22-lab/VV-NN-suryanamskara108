@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v24";
+const KEY  = "surya-v28";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -115,21 +115,32 @@ function setTodayGoal(n) {
 
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
+  // All previous versions — newest first so we get the most recent data
   const OLD_KEYS = [
-    "surya-v24","surya-v22","surya-v21","surya-v20","surya-v19","surya-v18",
+    "surya-v26","surya-v25","surya-v24","surya-v23",
+    "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18",
     "surya-v17","surya-v16","surya-v15","surya-v14","surya-v13",
     "surya-v12","surya-v11","surya-v10","surya-v9","surya-v8",
-    "surya-v7","surya-v6","surya-v5","surya-v4","surya-v3"
+    "surya-v7","surya-v6","surya-v5","surya-v4","surya-v3",
+    "surya-v2","surya-v1","surya-namaskara-data-v1","surya-v0"
   ];
   try {
     // Find best available saved data (current key first, then older)
     let raw = localStorage.getItem(KEY);
     let migratedFrom = null;
-    if(!raw) {
-      for(const ok of OLD_KEYS) {
-        const oldRaw = localStorage.getItem(ok);
-        if(oldRaw) { raw = oldRaw; migratedFrom = ok; break; }
-      }
+    // Collect ALL old saves and merge history — never lose a single day
+    const allSaves = [];
+    if(raw) allSaves.push({ key: KEY, raw });
+    for(const ok of OLD_KEYS) {
+      const oldRaw = localStorage.getItem(ok);
+      if(oldRaw && oldRaw !== raw) allSaves.push({ key: ok, raw: oldRaw });
+    }
+
+    // Use newest key as base, then merge history from all others
+    if(allSaves.length === 0) { raw = null; }
+    else {
+      raw = allSaves[0].raw;   // primary = current key or newest old key
+      migratedFrom = allSaves.length > 1 ? allSaves[1].key : null;
     }
 
     if(raw) {
@@ -340,6 +351,7 @@ async function releaseWakeLock() {
 
 // Re-acquire when app comes back to foreground (OS auto-releases on hide)
 document.addEventListener('visibilitychange', async () => {
+  // Re-acquire wake lock when returning to app during active session
   if (sess.active && !sess.paused && document.visibilityState === 'visible') {
     await acquireWakeLock();
   }
@@ -1278,7 +1290,11 @@ function openSettings() {
   togSet("tog-breath",  cfg.breathOn  !== false);
   togSet("tog-auto",    cfg.autoOn);
   togSet("tog-prana",   cfg.pranayamaAuto !== false);
-  document.getElementById("cfg-prana-min").value = cfg.pranayamaMinutes || 20;
+  document.getElementById("cfg-prana-min").value  = cfg.pranayamaMinutes || 20;
+  togSet("tog-alarm", cfg.alarmOn !== false);
+  document.getElementById("cfg-alarm-time").value =
+    String(cfg.alarmHour||5).padStart(2,"0") + ":" +
+    String(cfg.alarmMinute||0).padStart(2,"0");
   document.getElementById("cfg-voice-info").textContent =
     hiVoice ? "Active: "+hiVoice.name+" ("+hiVoice.lang+")"
             : "No hi-IN voice — install Hindi TTS in Android Settings → Language → Text-to-speech.";
@@ -1300,7 +1316,13 @@ function closeSettings() {
   cfg.autoOn           = togGet("tog-auto");
   cfg.pranayamaAuto    = togGet("tog-prana");
   cfg.pranayamaMinutes = parseInt(document.getElementById("cfg-prana-min").value)||20;
-  voiceMuted           = !cfg.voiceOn;
+  cfg.alarmOn          = togGet("tog-alarm");
+  const aTime = document.getElementById("cfg-alarm-time").value || "05:00";
+  const [aH, aM] = aTime.split(":").map(Number);
+  cfg.alarmHour   = isNaN(aH) ? 5  : aH;
+  cfg.alarmMinute = isNaN(aM) ? 0  : aM;
+  voiceMuted      = !cfg.voiceOn;
+  scheduleAlarm();   // reschedule with new time immediately
   cfg.chartDays = parseInt(document.getElementById("cfg-chart-days").value) || 21;
   cfg.chartMode = document.getElementById("cfg-chart-mode").value || "bar";
   saveAll(); render();
@@ -1308,7 +1330,7 @@ function closeSettings() {
 }
 const togSet=(id,on)=>document.getElementById(id).classList.toggle("on",on);
 const togGet=id=>document.getElementById(id).classList.contains("on");
-["tog-voice","tog-mantras","tog-breath","tog-auto","tog-prana"].forEach(id=>{
+["tog-voice","tog-mantras","tog-breath","tog-auto","tog-prana","tog-alarm"].forEach(id=>{
   const el = document.getElementById(id);
   if(el) el.addEventListener("click",function(){this.classList.toggle("on");});
 });
@@ -1349,8 +1371,177 @@ if("serviceWorker" in navigator){
   });
 }
 
+/* ── Midnight rollover — runs every 60 sec while app is open ── */
+let _lastCheckedDate = todayKey();
+
+function checkDayRollover() {
+  const now = todayKey();
+  if(now !== _lastCheckedDate) {
+    console.log("Day changed:", _lastCheckedDate, "→", now);
+    _lastCheckedDate = now;
+
+    // Run the day-advance logic (same as loadAll does on open)
+    const last = new Date(data.lastDate + "T00:00:00");
+    const cur  = new Date(now          + "T00:00:00");
+    const daysMissed = Math.max(1, Math.round((cur - last) / 86400000));
+
+    data.programDay = (data.programDay||1) + daysMissed;
+
+    // Fill skipped days in history
+    for(let d = 1; d < daysMissed; d++) {
+      const skipDate = new Date(last.getTime() + d * 86400000)
+        .toISOString().slice(0, 10);
+      if(!data.history[skipDate]) {
+        const skipGoal = Math.min(
+          (data.lastGoal||0) + d * cfg.dailyIncrease,
+          cfg.maxSets
+        );
+        data.history[skipDate] = { sets:0, timeMs:0, goal:skipGoal };
+      }
+    }
+
+    // Update lastGoal from most recent practiced day
+    for(let d = 1; d <= daysMissed + 1; d++) {
+      const check = new Date(cur.getTime() - d * 86400000)
+        .toISOString().slice(0, 10);
+      const rec = data.history[check];
+      if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
+    }
+
+    // Clear manual goal — new day gets auto-calculated goal
+    data.baseGoal = 0;
+    data.goalDate = "";
+    data.lastDate = now;
+
+    saveAll();
+    render();  // re-render with new goal immediately
+
+    // Announce new day's goal via voice
+    const newGoal = todayGoal();
+    setTimeout(()=>speakText(
+      "Good morning! New day target is " + newGoal + " rounds. Om."
+    ), 1000);
+  }
+}
+
+// Re-check ONLY when user opens / returns to the app — zero battery drain
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState === "visible") checkDayRollover();
+});
+// No setInterval — visibilitychange + midnight setTimeout covers everything
+
+// Schedule exact midnight trigger
+function scheduleMidnight() {
+  const now  = new Date();
+  const msToMidnight =
+    new Date(now.getFullYear(), now.getMonth(), now.getDate()+1, 0, 0, 5)
+      .getTime() - now.getTime();   // 5 sec after midnight for safety
+  setTimeout(()=>{
+    checkDayRollover();
+    scheduleMidnight();   // reschedule for next midnight
+  }, msToMidnight);
+  console.log("Next midnight rollover in", Math.round(msToMidnight/60000), "minutes");
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   DAILY ALARM — motivational notification at user-set time
+   Uses Web Notifications + setTimeout (no service worker push needed)
+═══════════════════════════════════════════════════════════════ */
+
+let alarmTimeout = null;
+
+async function requestNotificationPermission() {
+  if(!("Notification" in window)) return false;
+  if(Notification.permission === "granted") return true;
+  if(Notification.permission === "denied") return false;
+  const result = await Notification.requestPermission();
+  return result === "granted";
+}
+
+function msUntilAlarm(hour, minute) {
+  const now  = new Date();
+  const next = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate(),
+    hour, minute, 0, 0
+  );
+  // If alarm time already passed today, schedule for tomorrow
+  if(next.getTime() <= now.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next.getTime() - now.getTime();
+}
+
+function fmtAlarmTime(h, m) {
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hh   = h % 12 || 12;
+  const mm   = String(m).padStart(2, "0");
+  return hh + ":" + mm + " " + ampm;
+}
+
+function fireAlarm() {
+  if(!cfg.alarmOn) { scheduleAlarm(); return; }
+
+  const goal = todayGoal();
+  const done = todayDone();
+  const rem  = Math.max(0, goal - done);
+
+  // Motivational messages rotation
+  const msgs = [
+    "🌅 ॐ सूर्यनमस्कार! Rise and shine, Vaibhav! Today's target: " + goal + " rounds.",
+    "☀️ Surya awaits! " + goal + " rounds today. You've done " + done + " already. " + rem + " to go!",
+    "🙏 वैभव — सूर्यसारथी! Time for your " + goal + " Surya Namaskara rounds.",
+    "🌞 ॐ मित्राय नमः! Start strong today — " + goal + " rounds await you.",
+    "💪 Good morning! Your mat is waiting. " + goal + " rounds, one breath at a time.",
+  ];
+  const msg = msgs[Math.floor(Math.random() * msgs.length)];
+
+  // Show notification if permission granted
+  if(Notification.permission === "granted") {
+    try {
+      const n = new Notification("वैभव - सूर्यसारथी.१ॐ८", {
+        body   : msg,
+        icon   : "./icon-192.png",
+        badge  : "./icon-192.png",
+        tag    : "surya-alarm",          // replaces previous alarm notif
+        renotify: true,
+        vibrate: [200, 100, 200, 100, 400],
+        silent : false,
+      });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch(e) { console.warn("Notification failed:", e); }
+  }
+
+  // Also speak motivational message if app is visible
+  if(document.visibilityState === "visible") {
+    setTimeout(()=>speakText(
+      "Good morning Vaibhav! Time for Surya Namaskara. Today's target is " +
+      goal + " rounds. Om Mitraya Namaha."
+    ), 500);
+  }
+
+  // Schedule next day's alarm
+  scheduleAlarm();
+}
+
+function scheduleAlarm() {
+  if(alarmTimeout) { clearTimeout(alarmTimeout); alarmTimeout = null; }
+  if(!cfg.alarmOn) return;
+
+  const ms = msUntilAlarm(cfg.alarmHour || 5, cfg.alarmMinute || 0);
+  alarmTimeout = setTimeout(fireAlarm, ms);
+  console.log("Alarm set for", fmtAlarmTime(cfg.alarmHour, cfg.alarmMinute),
+    "— in", Math.round(ms/60000), "minutes");
+}
+
+function cancelAlarm() {
+  if(alarmTimeout) { clearTimeout(alarmTimeout); alarmTimeout = null; }
+}
+
 /* ── Init ────────────────────────────────────────────────────── */
 loadAll();
 saveAll();
 render();
 updateClockDisplay();
+scheduleMidnight();   // set exact midnight alarm
+scheduleAlarm();      // set daily morning alarm
