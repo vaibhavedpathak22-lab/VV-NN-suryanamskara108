@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v29";
+const KEY  = "surya-v30";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -102,13 +102,9 @@ function todayGoal() {
 }
 
 function setTodayGoal(n) {
-  // Save a manual goal for today; tomorrow it auto-adds dailyIncrease on top
-  data.baseGoal = Math.max(1, Math.min(n, cfg.maxSets));
-  data.goalDate = todayKey();
-  // Align programDay so auto-formula gives the right number next day:
-  // next day goal = (programDay+1)*dailyIncrease
-  // we want that = data.baseGoal + dailyIncrease
-  // so programDay = data.baseGoal / dailyIncrease (rounded)
+  data.baseGoal   = Math.max(1, Math.min(n, cfg.maxSets));
+  data.goalDate   = todayKey();
+  data.lastGoal   = data.baseGoal;  // set immediately so midnight rollover uses it
   data.programDay = Math.max(1, Math.round(data.baseGoal / cfg.dailyIncrease));
   saveAll();
 }
@@ -117,85 +113,109 @@ function setTodayGoal(n) {
 function loadAll() {
   // All previous versions — newest first so we get the most recent data
   const OLD_KEYS = [
-    "surya-v26","surya-v25","surya-v24","surya-v23",
-    "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18",
-    "surya-v17","surya-v16","surya-v15","surya-v14","surya-v13",
-    "surya-v12","surya-v11","surya-v10","surya-v9","surya-v8",
-    "surya-v7","surya-v6","surya-v5","surya-v4","surya-v3",
-    "surya-v2","surya-v1","surya-namaskara-data-v1","surya-v0"
+    "surya-v28","surya-v27","surya-v26","surya-v25","surya-v24","surya-v23",
+    "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18","surya-v17",
+    "surya-v16","surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
+    "surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5",
+    "surya-v4","surya-v3","surya-v2","surya-v1","surya-namaskara-data-v1","surya-v0"
   ];
+
+  // Helper: parse any save format → { cfg, data }
+  function parseSave(raw) {
+    const sv = JSON.parse(raw);
+    if(sv.data && typeof sv.data === "object") {
+      return { cfg: sv.cfg||{}, data: sv.data };
+    } else if(sv.history || sv.totalAllTime !== undefined) {
+      return { cfg:{}, data:{
+        history      : sv.history      || {},
+        totalAllTime : sv.totalAllTime || 0,
+        totalTimeMs  : sv.totalTimeMs  || 0,
+        programDay   : sv.programDay   || 1,
+        lastDate     : sv.lastDate     || "",
+        baseGoal     : sv.baseGoal     || 0,
+        goalDate     : sv.goalDate     || "",
+        lastGoal     : sv.lastGoal     || 0,
+        lastRecoveryAt: sv.lastRecoveryAt || 0,
+      }};
+    }
+    return null;
+  }
+
+  // Helper: normalise a history record to { sets, timeMs, goal }
+  function normRec(v) {
+    if(typeof v === "number") return { sets:v, timeMs:0, goal:0 };
+    return { sets:v.sets||0, timeMs:v.timeMs||0, goal:v.goal||0 };
+  }
+
+  // Helper: merge one history object into data.history (keep max sets, sum time)
+  function mergeHistory(src) {
+    Object.keys(src).forEach(date => {
+      const r = normRec(src[date]);
+      if(!data.history[date]) {
+        data.history[date] = r;
+      } else {
+        data.history[date].sets   = Math.max(data.history[date].sets||0,   r.sets);
+        data.history[date].timeMs = Math.max(data.history[date].timeMs||0, r.timeMs);
+        if(!data.history[date].goal && r.goal) data.history[date].goal = r.goal;
+      }
+    });
+  }
+
   try {
-    // Find best available saved data (current key first, then older)
-    let raw = localStorage.getItem(KEY);
-    let migratedFrom = null;
-    // Collect ALL old saves and merge history — never lose a single day
-    const allSaves = [];
-    if(raw) allSaves.push({ key: KEY, raw });
+    // ── Step 1: collect every save that exists on this device ──────
+    const allRaws = [];
+    const curRaw = localStorage.getItem(KEY);
+    if(curRaw) allRaws.push({ key:KEY, raw:curRaw });
     for(const ok of OLD_KEYS) {
-      const oldRaw = localStorage.getItem(ok);
-      if(oldRaw && oldRaw !== raw) allSaves.push({ key: ok, raw: oldRaw });
+      const r = localStorage.getItem(ok);
+      if(r && r !== curRaw) allRaws.push({ key:ok, raw:r });
     }
 
-    // Use newest key as base, then merge history from all others
-    if(allSaves.length === 0) { raw = null; }
-    else {
-      raw = allSaves[0].raw;   // primary = current key or newest old key
-      migratedFrom = allSaves.length > 1 ? allSaves[1].key : null;
-    }
-
-    if(raw) {
-      const sv = JSON.parse(raw);
-
-      // Handle TWO old save formats:
-      // Format A (v3-v5): { history:{}, totalAllTime:0, programDay:1, lastDate:"" }  (flat)
-      // Format B (v6+):   { cfg:{...}, data:{...} }  (nested)
-      if(sv.data && typeof sv.data === "object") {
-        // Format B — nested
-        Object.assign(cfg,  sv.cfg  || {});
-        Object.assign(data, sv.data || {});
-      } else if(sv.history) {
-        // Format A — flat root
-        data.history      = sv.history      || {};
-        data.totalAllTime = sv.totalAllTime || 0;
-        data.totalTimeMs  = sv.totalTimeMs  || 0;
-        data.programDay   = sv.programDay   || 1;
-        data.lastDate     = sv.lastDate     || "";
-        data.baseGoal     = sv.baseGoal     || 0;
-        data.goalDate     = sv.goalDate     || "";
-        data.lastGoal     = sv.lastGoal     || 0;
+    if(allRaws.length > 0) {
+      // ── Step 2: parse all saves ─────────────────────────────────
+      const parsed = [];
+      for(const s of allRaws) {
+        try { const p = parseSave(s.raw); if(p) parsed.push({ key:s.key, ...p }); }
+        catch(e) { console.warn("Could not parse", s.key, e); }
       }
 
-      // Migrate old history entries: plain number → object
-      Object.keys(data.history).forEach(k => {
-        const v = data.history[k];
-        if(typeof v === "number") data.history[k] = { sets: v, timeMs: 0, goal: 0 };
-        if(!data.history[k].timeMs) data.history[k].timeMs = 0;
-        if(!data.history[k].goal)   data.history[k].goal   = 0;
-      });
+      if(parsed.length > 0) {
+        // ── Step 3: pick best base (most recent programDay / totalAllTime)
+        parsed.sort((a,b) => {
+          const ad = a.data, bd = b.data;
+          if((bd.programDay||0) !== (ad.programDay||0))
+            return (bd.programDay||0) - (ad.programDay||0);
+          return (bd.totalAllTime||0) - (ad.totalAllTime||0);
+        });
+        const base = parsed[0];
+        Object.assign(cfg,  base.cfg);
+        Object.assign(data, base.data);
+        // Normalise base history
+        Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
 
-      // Always recompute totals from history on migration to ensure accuracy
-      const histTotal = Object.values(data.history).reduce((s,r)=> s+(r.sets||0), 0);
-      if(histTotal > 0) {
-        // Use max of stored value and computed — handles partial saves
-        data.totalAllTime = Math.max(data.totalAllTime||0, histTotal);
-      }
-      const histTime = Object.values(data.history).reduce((s,r)=> s+(r.timeMs||0), 0);
-      if(histTime > 0) {
-        data.totalTimeMs = Math.max(data.totalTimeMs||0, histTime);
-      }
-      // Ensure today's record exists with correct sets if it was saved mid-session
-      const todayRec = data.history[new Date().toISOString().slice(0,10)];
-      if(todayRec && typeof todayRec === "object") {
-        if(!todayRec.timeMs) todayRec.timeMs = 0;
-        if(!todayRec.goal)   todayRec.goal   = 0;
-      }
+        // ── Step 4: merge history from every other save ──────────
+        for(let i = 1; i < parsed.length; i++) {
+          mergeHistory(parsed[i].data.history || {});
+          // Also take higher totals if somehow this save is more complete
+          if((parsed[i].data.totalAllTime||0) > data.totalAllTime)
+            data.totalAllTime = parsed[i].data.totalAllTime;
+          if((parsed[i].data.totalTimeMs||0) > data.totalTimeMs)
+            data.totalTimeMs = parsed[i].data.totalTimeMs;
+        }
 
-      // Always save under current key (ensures next load is fast even without migration)
-      if(migratedFrom) {
-        console.log("Migrated from", migratedFrom,
-          "| sets:", data.totalAllTime, "| time:", data.totalTimeMs);
+        // ── Step 5: recompute totals from merged history (most accurate) ─
+        const histSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
+        const histTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
+        if(histSets > 0) data.totalAllTime = Math.max(data.totalAllTime, histSets);
+        if(histTime > 0) data.totalTimeMs  = Math.max(data.totalTimeMs,  histTime);
+
+        console.log("Migration complete | sources:", parsed.length,
+          "| total sets:", data.totalAllTime,
+          "| history days:", Object.keys(data.history).length);
+
+        // ── Step 6: save merged result immediately ───────────────
+        try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
       }
-      try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
     }
   } catch(e) { console.error("loadAll error:", e); }
 
