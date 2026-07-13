@@ -628,15 +628,20 @@ footer p{font-size:9.5px;color:var(--muted)}
     </div>
     <div class="srow">
       <label style="font-size:11px;color:var(--muted)">
-        Allow notifications when prompted for alarm to work
+        Tap to set real Android alarm in Clock app
       </label>
-      <button onclick="requestNotificationPermission().then(ok=>
-        this.textContent = ok ? '✓ Allowed' : '✗ Denied')"
+      <button onclick="setAndroidAlarm(cfg.alarmHour||5,cfg.alarmMinute||0);
+        this.textContent='✓ Opening Clock…';
+        setTimeout(()=>this.textContent='Set Android Alarm',3000)"
         style="background:var(--acc-dim);border:1px solid var(--acc);
                color:var(--acc-lt);border-radius:8px;padding:6px 10px;
                font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">
-        Allow
+        Set Android Alarm
       </button>
+    </div>
+    <div style="font-size:10px;color:var(--muted);padding:0 4px;line-height:1.5">
+      ⚠ PWA cannot fire background alarms reliably on OxygenOS.<br>
+      Tap "Set Android Alarm" — it opens your Clock app with the alarm pre-filled at the time you chose above. Approve it once and it fires every day even if app is closed.
     </div>
 
     <div class="srow divider">

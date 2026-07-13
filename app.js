@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v30";
+const KEY  = "surya-v31";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -162,59 +162,83 @@ function loadAll() {
   }
 
   try {
-    // ── Step 1: collect every save that exists on this device ──────
-    const allRaws = [];
     const curRaw = localStorage.getItem(KEY);
-    if(curRaw) allRaws.push({ key:KEY, raw:curRaw });
-    for(const ok of OLD_KEYS) {
-      const r = localStorage.getItem(ok);
-      if(r && r !== curRaw) allRaws.push({ key:ok, raw:r });
-    }
 
-    if(allRaws.length > 0) {
-      // ── Step 2: parse all saves ─────────────────────────────────
-      const parsed = [];
-      for(const s of allRaws) {
-        try { const p = parseSave(s.raw); if(p) parsed.push({ key:s.key, ...p }); }
-        catch(e) { console.warn("Could not parse", s.key, e); }
+    if(curRaw) {
+      // ── Current key exists: just load it, NO migration needed ───
+      const sv = parseSave(curRaw);
+      if(sv) {
+        Object.assign(cfg,  sv.cfg  || {});
+        Object.assign(data, sv.data || {});
+        Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
       }
 
-      if(parsed.length > 0) {
-        // ── Step 3: pick best base (most recent programDay / totalAllTime)
-        parsed.sort((a,b) => {
-          const ad = a.data, bd = b.data;
-          if((bd.programDay||0) !== (ad.programDay||0))
-            return (bd.programDay||0) - (ad.programDay||0);
-          return (bd.totalAllTime||0) - (ad.totalAllTime||0);
-        });
-        const base = parsed[0];
-        Object.assign(cfg,  base.cfg);
-        Object.assign(data, base.data);
-        // Normalise base history
-        Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
+    } else {
+      // ── First time with this key: collect & merge all old saves ─
+      const allRaws = [];
+      for(const ok of OLD_KEYS) {
+        const r = localStorage.getItem(ok);
+        if(r) allRaws.push({ key:ok, raw:r });
+      }
 
-        // ── Step 4: merge history from every other save ──────────
-        for(let i = 1; i < parsed.length; i++) {
-          mergeHistory(parsed[i].data.history || {});
-          // Also take higher totals if somehow this save is more complete
-          if((parsed[i].data.totalAllTime||0) > data.totalAllTime)
-            data.totalAllTime = parsed[i].data.totalAllTime;
-          if((parsed[i].data.totalTimeMs||0) > data.totalTimeMs)
-            data.totalTimeMs = parsed[i].data.totalTimeMs;
+      if(allRaws.length > 0) {
+        // Parse all old saves
+        const parsed = [];
+        for(const s of allRaws) {
+          try { const p = parseSave(s.raw); if(p) parsed.push({ key:s.key, ...p }); }
+          catch(e) { console.warn("Could not parse", s.key); }
         }
 
-        // ── Step 5: recompute totals from merged history (most accurate) ─
-        const histSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
-        const histTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
-        if(histSets > 0) data.totalAllTime = Math.max(data.totalAllTime, histSets);
-        if(histTime > 0) data.totalTimeMs  = Math.max(data.totalTimeMs,  histTime);
+        if(parsed.length > 0) {
+          // Pick the best base: highest programDay, then highest totalAllTime
+          parsed.sort((a,b) => {
+            const dd = (b.data.programDay||0) - (a.data.programDay||0);
+            return dd !== 0 ? dd : (b.data.totalAllTime||0) - (a.data.totalAllTime||0);
+          });
+          const base = parsed[0];
+          Object.assign(cfg,  base.cfg  || {});
+          Object.assign(data, base.data || {});
+          Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
 
-        console.log("Migration complete | sources:", parsed.length,
-          "| total sets:", data.totalAllTime,
-          "| history days:", Object.keys(data.history).length);
+          // Merge history from every other old save (don't overwrite cfg/data fields)
+          for(let i = 1; i < parsed.length; i++) {
+            mergeHistory(parsed[i].data.history || {});
+          }
 
-        // ── Step 6: save merged result immediately ───────────────
-        try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
+          // Recompute totals from merged history
+          const histSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
+          const histTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
+          data.totalAllTime = Math.max(data.totalAllTime||0, histSets);
+          data.totalTimeMs  = Math.max(data.totalTimeMs||0,  histTime);
+
+          console.log("ONE-TIME migration | sources:", parsed.length,
+            "| sets:", data.totalAllTime,
+            "| days:", Object.keys(data.history).length);
+
+          // Protect today's manual goal — if current save had a baseGoal
+          // for today, restore it (migration may have overwritten with old value)
+          for(const s of allRaws) {
+            try {
+              const p = parseSave(s.raw);
+              if(!p) continue;
+              const pd = p.data;
+              // If this save has a goalDate matching today, it's the most recent manual set
+              if(pd.goalDate && pd.goalDate === new Date().toISOString().slice(0,10)) {
+                data.baseGoal = pd.baseGoal || 0;
+                data.goalDate = pd.goalDate;
+                data.lastGoal = pd.lastGoal || pd.baseGoal || 0;
+              }
+            } catch(e) {}
+          }
+
+          // Save under new key immediately
+          try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
+
+          // Clear old keys so migration never re-runs again
+          for(const s of allRaws) {
+            try { localStorage.removeItem(s.key); } catch(e){}
+          }
+        }
       }
     }
   } catch(e) { console.error("loadAll error:", e); }
@@ -262,6 +286,18 @@ function loadAll() {
     data.goalDate = "";
   }
   data.lastDate = today;
+
+  // Safety: if today already has a completed history record with a goal,
+  // make sure lastGoal reflects it so tomorrow is always +4 from today
+  const todayHistRec = data.history[today];
+  if(todayHistRec && todayHistRec.goal && todayHistRec.goal > (data.lastGoal||0)) {
+    // Only update lastGoal if today's goal is higher (prevents regression)
+    // Don't update if user manually set a lower goal intentionally
+    if(!data.baseGoal || data.goalDate !== today) {
+      data.lastGoal = todayHistRec.goal;
+    }
+  }
+
   voiceMuted = !cfg.voiceOn;
 }
 function saveAll() {
@@ -1371,7 +1407,8 @@ function closeSettings() {
   cfg.alarmHour   = isNaN(aH) ? 5  : aH;
   cfg.alarmMinute = isNaN(aM) ? 0  : aM;
   voiceMuted      = !cfg.voiceOn;
-  scheduleAlarm();   // reschedule with new time immediately
+  scheduleAlarm();   // save alarm config + register sync
+  saveAlarmConfig();
   cfg.chartDays = parseInt(document.getElementById("cfg-chart-days").value) || 21;
   cfg.chartMode = document.getElementById("cfg-chart-mode").value || "bar";
   saveAll(); render();
@@ -1498,11 +1535,12 @@ function scheduleMidnight() {
 
 
 /* ═══════════════════════════════════════════════════════════════
-   DAILY ALARM — motivational notification at user-set time
-   Uses Web Notifications + setTimeout (no service worker push needed)
+   DAILY ALARM SYSTEM
+   Android kills setTimeout when app is backgrounded, so we use:
+   1. Service Worker showNotification (fires from SW, survives background)
+   2. Android system alarm deep-link as a guaranteed fallback
+   3. visibilitychange — when user opens app near alarm time, speak greeting
 ═══════════════════════════════════════════════════════════════ */
-
-let alarmTimeout = null;
 
 async function requestNotificationPermission() {
   if(!("Notification" in window)) return false;
@@ -1512,19 +1550,6 @@ async function requestNotificationPermission() {
   return result === "granted";
 }
 
-function msUntilAlarm(hour, minute) {
-  const now  = new Date();
-  const next = new Date(
-    now.getFullYear(), now.getMonth(), now.getDate(),
-    hour, minute, 0, 0
-  );
-  // If alarm time already passed today, schedule for tomorrow
-  if(next.getTime() <= now.getTime()) {
-    next.setDate(next.getDate() + 1);
-  }
-  return next.getTime() - now.getTime();
-}
-
 function fmtAlarmTime(h, m) {
   const ampm = h >= 12 ? "PM" : "AM";
   const hh   = h % 12 || 12;
@@ -1532,64 +1557,158 @@ function fmtAlarmTime(h, m) {
   return hh + ":" + mm + " " + ampm;
 }
 
+// Store alarm config in localStorage so SW can read it
+function saveAlarmConfig() {
+  try {
+    localStorage.setItem("surya-alarm-cfg", JSON.stringify({
+      on    : cfg.alarmOn,
+      hour  : cfg.alarmHour   || 5,
+      minute: cfg.alarmMinute || 0,
+    }));
+  } catch(e) {}
+}
+
+// Register periodic background sync (Chrome 80+ on Android)
+async function registerPeriodicSync() {
+  if(!("serviceWorker" in navigator)) return;
+  try {
+    const reg    = await navigator.serviceWorker.ready;
+    const status = await navigator.permissions.query({ name:"periodic-background-sync" });
+    if(status.state === "granted" && reg.periodicSync) {
+      await reg.periodicSync.register("surya-daily-alarm", { minInterval: 12*60*60*1000 });
+      console.log("Periodic background sync registered");
+    }
+  } catch(e) { console.log("periodicSync not available:", e.message); }
+}
+
+// Trigger SW notification immediately (works when SW is active)
+async function triggerSWNotification(title, body) {
+  if(!("serviceWorker" in navigator)) return false;
+  if(Notification.permission !== "granted") return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification(title, {
+      body,
+      icon   : "./icon-192.png",
+      badge  : "./icon-192.png",
+      tag    : "surya-alarm",
+      renotify: true,
+      vibrate: [300, 150, 300, 150, 600],
+      data   : { url: "./" },
+    });
+    return true;
+  } catch(e) { console.warn("SW notification failed:", e); return false; }
+}
+
+// ── Morning greeting: fires when app opened near alarm time ─────
+function checkMorningGreeting() {
+  if(!cfg.alarmOn) return;
+  const now  = new Date();
+  const ah   = cfg.alarmHour   || 5;
+  const am   = cfg.alarmMinute || 0;
+  const alarmToday = new Date(now.getFullYear(),now.getMonth(),now.getDate(),ah,am,0);
+  const diffMin = (now - alarmToday) / 60000;
+  if(diffMin >= 0 && diffMin <= 60) {
+    const goal = todayGoal();
+    setTimeout(()=>speakText(
+      "Good morning Vaibhav! Time for Surya Namaskara. " +
+      "Today target is " + goal + " rounds. Om Mitraya Namaha."
+    ), 1000);
+  }
+}
+
+// ── Core alarm: setTimeout fires at exact alarm time ─────────
+let _alarmTimeout = null;
+
+function msUntilAlarm(h, m) {
+  const now  = new Date();
+  const next = new Date(now.getFullYear(),now.getMonth(),now.getDate(),h,m,0,0);
+  if(next <= now) next.setDate(next.getDate() + 1);  // already passed → tomorrow
+  return next.getTime() - now.getTime();
+}
+
+function fmtAlarmTime(h, m) {
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hh   = h % 12 || 12;
+  return hh + ":" + String(m).padStart(2,"0") + " " + ampm;
+}
+
 function fireAlarm() {
   if(!cfg.alarmOn) { scheduleAlarm(); return; }
-
   const goal = todayGoal();
   const done = todayDone();
-  const rem  = Math.max(0, goal - done);
-
-  // Motivational messages rotation
   const msgs = [
-    "🌅 ॐ सूर्यनमस्कार! Rise and shine, Vaibhav! Today's target: " + goal + " rounds.",
-    "☀️ Surya awaits! " + goal + " rounds today. You've done " + done + " already. " + rem + " to go!",
-    "🙏 वैभव — सूर्यसारथी! Time for your " + goal + " Surya Namaskara rounds.",
-    "🌞 ॐ मित्राय नमः! Start strong today — " + goal + " rounds await you.",
-    "💪 Good morning! Your mat is waiting. " + goal + " rounds, one breath at a time.",
+    "Good morning Vaibhav! Today target is " + goal + " rounds. Om Mitraya Namaha.",
+    "Surya Namaskara time! " + goal + " rounds today. You have done " + done + " already.",
+    "Wake up Vaibhav! Your " + goal + " Surya Namaskaras are waiting.",
+    "Om! Rise and shine. Today target " + goal + " rounds. Let us begin.",
   ];
   const msg = msgs[Math.floor(Math.random() * msgs.length)];
 
-  // Show notification if permission granted
+  // Show notification banner
   if(Notification.permission === "granted") {
     try {
       const n = new Notification("वैभव - सूर्यसारथी.१ॐ८", {
         body   : msg,
         icon   : "./icon-192.png",
         badge  : "./icon-192.png",
-        tag    : "surya-alarm",          // replaces previous alarm notif
+        tag    : "surya-daily-alarm",
         renotify: true,
-        vibrate: [200, 100, 200, 100, 400],
-        silent : false,
+        vibrate: [300,100,300,100,600],
       });
-      n.onclick = () => { window.focus(); n.close(); };
-    } catch(e) { console.warn("Notification failed:", e); }
+      n.onclick = ()=>{ window.focus(); n.close(); };
+    } catch(e) { console.warn("Notification error:", e); }
   }
 
-  // Also speak motivational message if app is visible
+  // Speak if app is visible
   if(document.visibilityState === "visible") {
-    setTimeout(()=>speakText(
-      "Good morning Vaibhav! Time for Surya Namaskara. Today's target is " +
-      goal + " rounds. Om Mitraya Namaha."
-    ), 500);
+    setTimeout(()=>speakText(msg), 500);
   }
 
-  // Schedule next day's alarm
+  // Reschedule for tomorrow
   scheduleAlarm();
 }
 
 function scheduleAlarm() {
-  if(alarmTimeout) { clearTimeout(alarmTimeout); alarmTimeout = null; }
-  if(!cfg.alarmOn) return;
-
-  const ms = msUntilAlarm(cfg.alarmHour || 5, cfg.alarmMinute || 0);
-  alarmTimeout = setTimeout(fireAlarm, ms);
-  console.log("Alarm set for", fmtAlarmTime(cfg.alarmHour, cfg.alarmMinute),
-    "— in", Math.round(ms/60000), "minutes");
+  // Clear any existing alarm timer
+  if(_alarmTimeout) { clearTimeout(_alarmTimeout); _alarmTimeout = null; }
+  if(!cfg.alarmOn) {
+    setStatus("Alarm off");
+    return;
+  }
+  const h  = cfg.alarmHour   || 5;
+  const m  = cfg.alarmMinute || 0;
+  const ms = msUntilAlarm(h, m);
+  _alarmTimeout = setTimeout(fireAlarm, ms);
+  const mins = Math.round(ms / 60000);
+  const hrs  = Math.floor(mins / 60);
+  const rem  = mins % 60;
+  const timeStr = hrs > 0 ? hrs+"h "+rem+"m" : rem+"m";
+  setStatus("Alarm set: " + fmtAlarmTime(h,m) + " (in " + timeStr + ")");
+  console.log("Alarm scheduled for", fmtAlarmTime(h,m), "in", timeStr);
 }
 
 function cancelAlarm() {
-  if(alarmTimeout) { clearTimeout(alarmTimeout); alarmTimeout = null; }
+  if(_alarmTimeout) { clearTimeout(_alarmTimeout); _alarmTimeout = null; }
+  setStatus("Alarm cancelled");
 }
+
+// Re-schedule alarm when app comes back to foreground
+// (Android may have killed the setTimeout while phone was sleeping)
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState === "visible" && cfg.alarmOn) {
+    scheduleAlarm();        // reset the timer accurately
+    checkMorningGreeting(); // greet if within 60 min of alarm time
+  }
+});
+
+// SW message listener (for future SW-based alarm)
+navigator.serviceWorker && navigator.serviceWorker.addEventListener("message", e=>{
+  if(e.data && e.data.type === "ALARM_FIRED") {
+    const goal = todayGoal();
+    speakText("Good morning! Today target is " + goal + " rounds. Om.");
+  }
+});
 
 /* ── Init ────────────────────────────────────────────────────── */
 loadAll();
@@ -1597,4 +1716,5 @@ saveAll();
 render();
 updateClockDisplay();
 scheduleMidnight();   // set exact midnight alarm
-scheduleAlarm();      // set daily morning alarm
+scheduleAlarm();      // configure alarm + register periodic sync
+checkMorningGreeting(); // greet if user opens app near alarm time
