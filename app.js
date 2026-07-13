@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v28";
+const KEY  = "surya-v29";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -223,12 +223,19 @@ function loadAll() {
       }
     }
 
-    // Save lastGoal — walk back to find the last day actually practiced
-    for(let d = 1; d <= daysMissed + 1; d++) {
-      const check = new Date(now.getTime() - d * 86400000)
-        .toISOString().slice(0, 10);
-      const rec = data.history[check];
-      if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
+    // Save lastGoal so tomorrow = today's goal + dailyIncrease (exact, no drift)
+    // Priority: baseGoal (manual set today) > history record > existing lastGoal
+    if(data.baseGoal > 0 && data.goalDate === data.lastDate) {
+      // User had manually set today's goal — use that as base for tomorrow
+      data.lastGoal = data.baseGoal;
+    } else {
+      // Walk back through history to find last recorded goal
+      for(let d = 1; d <= daysMissed + 1; d++) {
+        const check = new Date(now.getTime() - d * 86400000)
+          .toISOString().slice(0, 10);
+        const rec = data.history[check];
+        if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
+      }
     }
 
     data.baseGoal = 0;
@@ -1229,6 +1236,28 @@ function closePranayama() {
   document.getElementById("prana-ov").classList.remove("show");
 }
 
+/* ── Pranayama overlay buttons ──────────────────────────────── */
+document.getElementById("prana-close-btn").addEventListener("click", closePranayama);
+document.getElementById("prana-pause-btn").addEventListener("click", pauseResumePrana);
+document.getElementById("prana-skip-btn").addEventListener("click",  skipPranaPhase);
+
+// Manual start — only allowed after today's goal is complete
+document.getElementById("prana-start-btn").addEventListener("click", () => {
+  const done = todayDone();
+  const goal = todayGoal();
+  if(done < goal) {
+    const btn = document.getElementById("prana-start-btn");
+    const orig = btn.innerHTML;
+    btn.innerHTML = "🚫 Complete " + (goal - done) + " more sets first!";
+    btn.style.cssText = "background:linear-gradient(135deg,#3A1000,#1A1A0A);border-color:var(--danger);color:var(--danger)";
+    setTimeout(() => { btn.innerHTML = orig; btn.style.cssText = ""; }, 2800);
+    vib(100);
+    speakText("Complete today's target of " + goal + " rounds first.");
+    return;
+  }
+  showPranayama();
+});
+
 /* ── Controls ────────────────────────────────────────────────── */
 document.getElementById("main-btn").addEventListener("click", handleMainBtn);
 document.getElementById("reset-btn").addEventListener("click", resetSession);
@@ -1400,15 +1429,19 @@ function checkDayRollover() {
       }
     }
 
-    // Update lastGoal from most recent practiced day
-    for(let d = 1; d <= daysMissed + 1; d++) {
-      const check = new Date(cur.getTime() - d * 86400000)
-        .toISOString().slice(0, 10);
-      const rec = data.history[check];
-      if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
+    // Save lastGoal: manual baseGoal takes priority over history walk
+    if(data.baseGoal > 0 && data.goalDate === data.lastDate) {
+      data.lastGoal = data.baseGoal;   // e.g. set 12 today → tomorrow = 16
+    } else {
+      for(let d = 1; d <= daysMissed + 1; d++) {
+        const check = new Date(cur.getTime() - d * 86400000)
+          .toISOString().slice(0, 10);
+        const rec = data.history[check];
+        if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
+      }
     }
 
-    // Clear manual goal — new day gets auto-calculated goal
+    // Clear manual override — tomorrow auto = lastGoal + 4
     data.baseGoal = 0;
     data.goalDate = "";
     data.lastDate = now;
