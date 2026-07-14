@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v32";
+const KEY  = "surya-v33";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -299,6 +299,16 @@ function loadAll() {
   }
 
   voiceMuted = !cfg.voiceOn;
+
+  // Sync rollover tracker with stored lastDate
+  // If lastDate is today and it's past 4:01 AM, mark as already rolled
+  const _now = new Date();
+  if(data.lastDate === todayKey() &&
+    (_now.getHours() > 4 || (_now.getHours() === 4 && _now.getMinutes() >= 1))) {
+    _goalRolledDate = todayKey();
+  } else {
+    _goalRolledDate = data.lastDate || "";
+  }
 }
 function saveAll() {
   try { localStorage.setItem(KEY, JSON.stringify({cfg,data})); }
@@ -1484,77 +1494,119 @@ if("serviceWorker" in navigator){
   });
 }
 
-/* ── Midnight rollover — runs every 60 sec while app is open ── */
-let _lastCheckedDate = todayKey();
+/* ═══════════════════════════════════════════════════════════════
+   GOAL ROLLOVER SYSTEM — updates goal at 4:01 AM daily
+   Works on OxygenOS: visibilitychange fires every time you
+   open the app, so opening at 5 AM always gets fresh goal.
+   Short setTimeout (< 30 min) also set when app is open near
+   4:01 AM (e.g. if app open at 3:45 AM).
+═══════════════════════════════════════════════════════════════ */
+
+// Track last rollover so it fires only once per day even on multiple app opens
+// stored as "YYYY-MM-DD" — the date for which goal was already advanced
+let _goalRolledDate = data.lastDate || "";
+
+function _doGoalRollover() {
+  const today = todayKey();
+
+  // Already rolled over for today — skip
+  if(_goalRolledDate === today) return;
+  _goalRolledDate = today;
+
+  const last = new Date((data.lastDate || today) + "T00:00:00");
+  const cur  = new Date(today + "T00:00:00");
+  const daysMissed = Math.max(1, Math.round((cur - last) / 86400000));
+
+  // Advance programDay
+  data.programDay = (data.programDay || 1) + daysMissed;
+
+  // Fill any skipped days in history with 0-sets records
+  for(let d = 1; d < daysMissed; d++) {
+    const skipDate = new Date(last.getTime() + d * 86400000)
+      .toISOString().slice(0, 10);
+    if(!data.history[skipDate]) {
+      const skipGoal = Math.min(
+        (data.lastGoal || 0) + d * cfg.dailyIncrease,
+        cfg.maxSets
+      );
+      data.history[skipDate] = { sets:0, timeMs:0, goal:skipGoal };
+    }
+  }
+
+  // Determine lastGoal for tomorrow's calculation
+  // Priority: manual baseGoal set yesterday > history record > existing lastGoal
+  if(data.baseGoal > 0 && data.goalDate === data.lastDate) {
+    data.lastGoal = data.baseGoal;  // manual set yesterday → use as base
+  } else {
+    for(let d = 1; d <= daysMissed + 1; d++) {
+      const check = new Date(cur.getTime() - d * 86400000)
+        .toISOString().slice(0, 10);
+      const rec = data.history[check];
+      if(rec && rec.goal > 0) { data.lastGoal = rec.goal; break; }
+    }
+  }
+
+  // Clear manual override so today uses auto formula (lastGoal + 4)
+  data.baseGoal = 0;
+  data.goalDate = "";
+  data.lastDate = today;
+
+  saveAll();
+  render();
+
+  console.log("Goal rolled over at 4:01 AM | new goal:", todayGoal(),
+    "| programDay:", data.programDay);
+}
 
 function checkDayRollover() {
-  const now = todayKey();
-  if(now !== _lastCheckedDate) {
-    console.log("Day changed:", _lastCheckedDate, "→", now);
-    _lastCheckedDate = now;
+  const now  = new Date();
+  const hour = now.getHours();
+  const min  = now.getMinutes();
+  const today = todayKey();
 
-    // Run the day-advance logic (same as loadAll does on open)
-    const last = new Date(data.lastDate + "T00:00:00");
-    const cur  = new Date(now          + "T00:00:00");
-    const daysMissed = Math.max(1, Math.round((cur - last) / 86400000));
+  // Rollover condition: it's 4:01 AM or later AND we haven't rolled today yet
+  const pastRolloverTime = (hour > 4) || (hour === 4 && min >= 1);
+  const notYetRolled     = _goalRolledDate !== today;
 
-    data.programDay = (data.programDay||1) + daysMissed;
+  if(pastRolloverTime && notYetRolled) {
+    _doGoalRollover();
+  }
+}
 
-    // Fill skipped days in history
-    for(let d = 1; d < daysMissed; d++) {
-      const skipDate = new Date(last.getTime() + d * 86400000)
-        .toISOString().slice(0, 10);
-      if(!data.history[skipDate]) {
-        const skipGoal = Math.min(
-          (data.lastGoal||0) + d * cfg.dailyIncrease,
-          cfg.maxSets
-        );
-        data.history[skipDate] = { sets:0, timeMs:0, goal:skipGoal };
-      }
-    }
+let _rolloverTimer = null;
 
-    // Save lastGoal: manual baseGoal takes priority over history walk
-    if(data.baseGoal > 0 && data.goalDate === data.lastDate) {
-      data.lastGoal = data.baseGoal;   // e.g. set 12 today → tomorrow = 16
-    } else {
-      for(let d = 1; d <= daysMissed + 1; d++) {
-        const check = new Date(cur.getTime() - d * 86400000)
-          .toISOString().slice(0, 10);
-        const rec = data.history[check];
-        if(rec && rec.goal) { data.lastGoal = rec.goal; break; }
-      }
-    }
+function scheduleRollover() {
+  // Cancel existing timer
+  if(_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
 
-    // Clear manual override — tomorrow auto = lastGoal + 4
-    data.baseGoal = 0;
-    data.goalDate = "";
-    data.lastDate = now;
+  const now  = new Date();
+  const target = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate(),
+    4, 1, 0, 0   // 4:01:00 AM today
+  );
+  // If 4:01 AM already passed today, schedule for tomorrow 4:01 AM
+  if(target <= now) target.setDate(target.getDate() + 1);
 
-    saveAll();
-    render();  // re-render with new goal immediately
+  const ms = target.getTime() - now.getTime();
 
-    // Announce new day's goal via voice
-    const newGoal = todayGoal();
-    setTimeout(()=>speakText(
-      "Good morning! New day target is " + newGoal + " rounds. Om."
-    ), 1000);
+  // Only set timer if within 90 minutes — OxygenOS kills longer timers
+  // visibilitychange will re-schedule when app is opened later
+  if(ms <= 90 * 60 * 1000) {
+    _rolloverTimer = setTimeout(() => {
+      _doGoalRollover();
+      scheduleRollover();  // schedule for next day's 4:01 AM
+    }, ms);
+    const mins = Math.round(ms / 60000);
+    console.log("Goal rollover timer set: fires in", mins, "min (4:01 AM)");
+  } else {
+    const hrs = Math.floor(ms / 3600000);
+    const rem = Math.round((ms % 3600000) / 60000);
+    console.log("Goal rollover: next at 4:01 AM in", hrs + "h " + rem + "m",
+      "| will re-schedule on app open");
   }
 }
 
 // visibilitychange handled in unified handler below
-
-// Schedule exact midnight trigger
-function scheduleMidnight() {
-  const now  = new Date();
-  const msToMidnight =
-    new Date(now.getFullYear(), now.getMonth(), now.getDate()+1, 0, 0, 5)
-      .getTime() - now.getTime();   // 5 sec after midnight for safety
-  setTimeout(()=>{
-    checkDayRollover();
-    scheduleMidnight();   // reschedule for next midnight
-  }, msToMidnight);
-  console.log("Next midnight rollover in", Math.round(msToMidnight/60000), "minutes");
-}
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1760,11 +1812,13 @@ document.addEventListener("visibilitychange", async () => {
   if(document.visibilityState !== "visible") return;
   // 1. Re-acquire wake lock if session active
   if(sess.active && !sess.paused) await acquireWakeLock();
-  // 2. Check if day rolled over while phone was sleeping
+  // 2. Check if goal needs rolling over (4:01 AM rule)
   checkDayRollover();
-  // 3. Reschedule alarm timer (OxygenOS may have killed it)
+  // 3. Re-schedule rollover timer (OxygenOS may have killed it)
+  scheduleRollover();
+  // 4. Reschedule alarm timer
   if(cfg.alarmOn) scheduleAlarm();
-  // 4. Greet if opened near alarm time
+  // 5. Greet if opened near alarm time
   checkMorningGreeting();
 });
 
@@ -1773,6 +1827,6 @@ loadAll();
 saveAll();
 render();
 updateClockDisplay();
-scheduleMidnight();   // set exact midnight alarm
+scheduleRollover();   // schedule goal update at 4:01 AM
 scheduleAlarm();      // configure alarm + register periodic sync
 checkMorningGreeting(); // greet if user opens app near alarm time
