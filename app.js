@@ -162,30 +162,25 @@ function loadAll() {
   }
 
   try {
+    const TODAY = new Date().toISOString().slice(0,10);
     const curRaw = localStorage.getItem(KEY);
 
     if(curRaw) {
-      // ── Current key exists: just load it, NO migration needed ───
+      // ── Current key exists — load it exactly, protect today's data ──────
       const sv = parseSave(curRaw);
       if(sv) {
-        // Snapshot totals BEFORE overwrite — protect them
-        const prevSets = data.totalAllTime || 0;
-        const prevTime = data.totalTimeMs  || 0;
         Object.assign(cfg,  sv.cfg  || {});
         Object.assign(data, sv.data || {});
-        Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
-        // Never let totals go DOWN (guards against corrupt save)
-        data.totalAllTime = Math.max(data.totalAllTime||0, prevSets);
-        data.totalTimeMs  = Math.max(data.totalTimeMs||0,  prevTime);
-        // Also recompute from history as sanity check — take highest
-        const chkSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
-        const chkTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
-        if(chkSets > data.totalAllTime) data.totalAllTime = chkSets;
-        if(chkTime > data.totalTimeMs)  data.totalTimeMs  = chkTime;
+        Object.keys(data.history).forEach(k => {
+          data.history[k] = normRec(data.history[k]);
+        });
+        // totalAllTime, totalTimeMs, today's sets and time are AUTHORITATIVE
+        // as stored — never recompute, never override. completeSet() is the
+        // only function allowed to increment these.
       }
 
     } else {
-      // ── First time with this key: collect & merge all old saves ─
+      // ── First-time load with new key — one-time migration from old keys ──
       const allRaws = [];
       for(const ok of OLD_KEYS) {
         const r = localStorage.getItem(ok);
@@ -193,59 +188,96 @@ function loadAll() {
       }
 
       if(allRaws.length > 0) {
-        // Parse all old saves
         const parsed = [];
         for(const s of allRaws) {
-          try { const p = parseSave(s.raw); if(p) parsed.push({ key:s.key, ...p }); }
-          catch(e) { console.warn("Could not parse", s.key); }
+          try {
+            const p = parseSave(s.raw);
+            if(p) parsed.push({ key:s.key, ...p });
+          } catch(e) { console.warn("Could not parse", s.key); }
         }
 
         if(parsed.length > 0) {
-          // Pick the best base: highest programDay, then highest totalAllTime
-          parsed.sort((a,b) => {
-            const dd = (b.data.programDay||0) - (a.data.programDay||0);
-            return dd !== 0 ? dd : (b.data.totalAllTime||0) - (a.data.totalAllTime||0);
-          });
+          // ── Pick best base: highest totalAllTime = most complete ──────────
+          parsed.sort((a,b) =>
+            (b.data.totalAllTime||0) - (a.data.totalAllTime||0)
+          );
           const base = parsed[0];
           Object.assign(cfg,  base.cfg  || {});
           Object.assign(data, base.data || {});
-          Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
+          Object.keys(data.history).forEach(k => {
+            data.history[k] = normRec(data.history[k]);
+          });
 
-          // Merge history from every other old save (don't overwrite cfg/data fields)
-          for(let i = 1; i < parsed.length; i++) {
-            mergeHistory(parsed[i].data.history || {});
+          // ── Snapshot today's values from the BEST save BEFORE merging ────
+          // "Best" for today = highest sets count for today's date
+          let todayBestSets  = data.history[TODAY]?.sets   || 0;
+          let todayBestTime  = data.history[TODAY]?.timeMs || 0;
+          let todayBestGoal  = data.history[TODAY]?.goal   || 0;
+          let bestTotalSets  = data.totalAllTime || 0;
+          let bestTotalTime  = data.totalTimeMs  || 0;
+
+          // Check all old saves for a higher today-count
+          for(const p of parsed) {
+            const tr = normRec(p.data.history?.[TODAY] || {});
+            if(tr.sets > todayBestSets) {
+              todayBestSets = tr.sets;
+              todayBestTime = Math.max(todayBestTime, tr.timeMs);
+            }
+            if((p.data.totalAllTime||0) > bestTotalSets)
+              bestTotalSets = p.data.totalAllTime;
+            if((p.data.totalTimeMs||0)  > bestTotalTime)
+              bestTotalTime = p.data.totalTimeMs;
           }
 
-          // Recompute totals from merged history
-          const histSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
-          const histTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
-          data.totalAllTime = Math.max(data.totalAllTime||0, histSets);
-          data.totalTimeMs  = Math.max(data.totalTimeMs||0,  histTime);
+          // ── Merge ONLY missing past dates — never overwrite existing ──────
+          for(let i = 1; i < parsed.length; i++) {
+            const srcHist = parsed[i].data.history || {};
+            Object.keys(srcHist).forEach(date => {
+              if(date === TODAY) return;      // handle today separately
+              if(!data.history[date]) {
+                data.history[date] = normRec(srcHist[date]);
+              }
+              // Existing past dates — left untouched (base is authoritative)
+            });
+          }
 
-          console.log("ONE-TIME migration | sources:", parsed.length,
-            "| sets:", data.totalAllTime,
-            "| days:", Object.keys(data.history).length);
+          // ── Restore today's best values (highest sets wins) ───────────────
+          data.history[TODAY] = {
+            sets  : todayBestSets,
+            timeMs: todayBestTime,
+            goal  : todayBestGoal,
+          };
 
-          // Protect today's manual goal — if current save had a baseGoal
-          // for today, restore it (migration may have overwritten with old value)
+          // ── Restore totals — never reduce them ───────────────────────────
+          data.totalAllTime = bestTotalSets;
+          data.totalTimeMs  = bestTotalTime;
+
+          // ── Restore today's manual goal if any save has one for today ─────
           for(const s of allRaws) {
             try {
               const p = parseSave(s.raw);
               if(!p) continue;
-              const pd = p.data;
-              // If this save has a goalDate matching today, it's the most recent manual set
-              if(pd.goalDate && pd.goalDate === new Date().toISOString().slice(0,10)) {
-                data.baseGoal = pd.baseGoal || 0;
-                data.goalDate = pd.goalDate;
-                data.lastGoal = pd.lastGoal || pd.baseGoal || 0;
+              if(p.data.goalDate === TODAY && (p.data.baseGoal||0) > 0) {
+                data.baseGoal = p.data.baseGoal;
+                data.goalDate = TODAY;
+                data.lastGoal = p.data.lastGoal || p.data.baseGoal;
+                break;
               }
             } catch(e) {}
           }
 
+          console.log(
+            "ONE-TIME migration complete | sources:", parsed.length,
+            "| totalSets:", data.totalAllTime,
+            "| totalTime:", Math.round((data.totalTimeMs||0)/60000) + "min",
+            "| today sets:", todayBestSets,
+            "| history days:", Object.keys(data.history).length
+          );
+
           // Save under new key immediately
           try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
 
-          // Clear old keys so migration never re-runs again
+          // Delete old keys — migration runs exactly once
           for(const s of allRaws) {
             try { localStorage.removeItem(s.key); } catch(e){}
           }
