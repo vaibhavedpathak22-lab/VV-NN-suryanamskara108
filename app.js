@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v33";
+const KEY  = "surya-v34";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -168,9 +168,20 @@ function loadAll() {
       // ── Current key exists: just load it, NO migration needed ───
       const sv = parseSave(curRaw);
       if(sv) {
+        // Snapshot totals BEFORE overwrite — protect them
+        const prevSets = data.totalAllTime || 0;
+        const prevTime = data.totalTimeMs  || 0;
         Object.assign(cfg,  sv.cfg  || {});
         Object.assign(data, sv.data || {});
         Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
+        // Never let totals go DOWN (guards against corrupt save)
+        data.totalAllTime = Math.max(data.totalAllTime||0, prevSets);
+        data.totalTimeMs  = Math.max(data.totalTimeMs||0,  prevTime);
+        // Also recompute from history as sanity check — take highest
+        const chkSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
+        const chkTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
+        if(chkSets > data.totalAllTime) data.totalAllTime = chkSets;
+        if(chkTime > data.totalTimeMs)  data.totalTimeMs  = chkTime;
       }
 
     } else {
