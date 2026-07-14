@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v34";
+const KEY  = "surya-v35";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -112,7 +112,9 @@ function setTodayGoal(n) {
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
   // All previous versions — newest first so we get the most recent data
+  // ALL versions ever released — newest first so best data is picked first
   const OLD_KEYS = [
+    "surya-v33","surya-v32","surya-v31","surya-v30","surya-v29",
     "surya-v28","surya-v27","surya-v26","surya-v25","surya-v24","surya-v23",
     "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18","surya-v17",
     "surya-v16","surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
@@ -1864,6 +1866,89 @@ document.addEventListener("visibilitychange", async () => {
   // 5. Greet if opened near alarm time
   checkMorningGreeting();
 });
+
+
+/* ── Data Recovery Scanner ─────────────────────────────────────
+   Scans every possible localStorage key and shows what's found.
+   Called from Settings "Scan & Recover" button.
+──────────────────────────────────────────────────────────────── */
+function scanAndRecover() {
+  const ALL_KEYS = [
+    "surya-v35","surya-v33","surya-v32","surya-v31","surya-v30","surya-v29",
+    "surya-v28","surya-v27","surya-v26","surya-v25","surya-v24","surya-v23",
+    "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18","surya-v17",
+    "surya-v16","surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
+    "surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5",
+    "surya-v4","surya-v3","surya-v2","surya-v1","surya-namaskara-data-v1","surya-v0"
+  ];
+
+  const found = [];
+  for(const k of ALL_KEYS) {
+    const raw = localStorage.getItem(k);
+    if(!raw) continue;
+    try {
+      const sv  = JSON.parse(raw);
+      const d   = sv.data || sv;  // handle flat and nested formats
+      const sets = d.totalAllTime || 0;
+      const days = Object.keys(d.history || {}).length;
+      const timeMs = d.totalTimeMs || 0;
+      found.push({ key:k, sets, days, timeMs });
+    } catch(e) { found.push({ key:k, sets:"?", days:"?", timeMs:0 }); }
+  }
+
+  if(found.length === 0) {
+    alert("No saved data found in any version key.
+All data appears to have been cleared.");
+    return;
+  }
+
+  // Show found keys
+  let msg = "Found data in " + found.length + " version key(s):
+
+";
+  found.forEach(f => {
+    const mins = Math.round(f.timeMs / 60000);
+    msg += f.key + "
+  Sets: " + f.sets + " | Days: " + f.days + " | Time: " + mins + "min
+
+";
+  });
+
+  // Find best (most sets)
+  const best = found.reduce((a,b) => (b.sets > a.sets ? b : a), found[0]);
+  msg += "Best record: " + best.key + " (" + best.sets + " sets)
+
+";
+  msg += "Tap OK to RESTORE from " + best.key + " and save as current version.";
+
+  if(confirm(msg)) {
+    try {
+      const raw = localStorage.getItem(best.key);
+      const sv  = JSON.parse(raw);
+      const d   = sv.data || sv;
+      const c   = sv.cfg  || {};
+
+      // Load into current data
+      Object.assign(cfg,  c);
+      Object.assign(data, d);
+
+      // Normalise history
+      Object.keys(data.history).forEach(k => {
+        const v = data.history[k];
+        if(typeof v === "number") data.history[k] = {sets:v,timeMs:0,goal:0};
+        if(!data.history[k].timeMs) data.history[k].timeMs = 0;
+        if(!data.history[k].goal)   data.history[k].goal   = 0;
+      });
+
+      // Save under current key
+      localStorage.setItem(KEY, JSON.stringify({cfg, data}));
+      alert("Restored! Sets: " + data.totalAllTime + " | History days: " + Object.keys(data.history).length);
+      location.reload();
+    } catch(e) {
+      alert("Restore failed: " + e.message);
+    }
+  }
+}
 
 /* ── Init ────────────────────────────────────────────────────── */
 loadAll();
