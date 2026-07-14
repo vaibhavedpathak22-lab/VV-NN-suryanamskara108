@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v31";
+const KEY  = "surya-v32";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -368,6 +368,31 @@ function makeEnUtt(text) {
   return u;
 }
 
+// Language-aware utterance for pranayama instructions
+function makePranaUtt(text) {
+  const lang = cfg.pranaLang || "en";
+  const u = new SpeechSynthesisUtterance(text);
+  if(lang === "hi") {
+    u.lang = "hi-IN"; u.rate = 0.80; u.pitch = 1.0; u.volume = 1.0;
+    const hv = voices.find(v=>v.lang==="hi-IN") || voices.find(v=>v.lang.startsWith("hi")) || null;
+    if(hv) u.voice = hv;
+  } else if(lang === "mr") {
+    u.lang = "mr-IN"; u.rate = 0.78; u.pitch = 1.0; u.volume = 1.0;
+    const mv = voices.find(v=>v.lang==="mr-IN") || voices.find(v=>v.lang.startsWith("mr")) || null;
+    if(mv) u.voice = mv;
+    else { // fallback to hi-IN which understands Devanagari
+      u.lang = "hi-IN";
+      const hv = voices.find(v=>v.lang==="hi-IN") || null;
+      if(hv) u.voice = hv;
+    }
+  } else {
+    u.lang = "en-IN"; u.rate = 0.85; u.pitch = 1.05; u.volume = 1.0;
+    const ev = voices.find(v=>v.lang==="en-IN") || voices.find(v=>v.lang.startsWith("en")) || null;
+    if(ev) u.voice = ev;
+  }
+  return u;
+}
+
 // Speak mantra (Sanskrit) then optional breath cue (English) — queued
 function speakMantra(text, breath="", delay=0) {
   if(voiceMuted || !window.speechSynthesis) return;
@@ -384,6 +409,12 @@ function speakMantra(text, breath="", delay=0) {
 function speakText(text, delay=0) {
   if(voiceMuted || !window.speechSynthesis) return;
   setTimeout(()=>{ qSpeak(makeEnUtt(text)); }, delay);
+}
+
+// Speak pranayama instruction in selected language — queued
+function speakPrana(text, delay=0) {
+  if(voiceMuted || !window.speechSynthesis) return;
+  setTimeout(()=>{ qSpeak(makePranaUtt(text)); }, delay);
 }
 
 
@@ -413,12 +444,7 @@ async function releaseWakeLock() {
 }
 
 // Re-acquire when app comes back to foreground (OS auto-releases on hide)
-document.addEventListener('visibilitychange', async () => {
-  // Re-acquire wake lock when returning to app during active session
-  if (sess.active && !sess.paused && document.visibilityState === 'visible') {
-    await acquireWakeLock();
-  }
-});
+// visibilitychange handled in unified handler below
 
 /* ── DND Banner ──────────────────────────────────────────────── */
 function showDndBanner() {
@@ -1157,7 +1183,7 @@ function startPranaPhase() {
   // Phase progress bar reset
   document.getElementById("prana-phase-bar").style.width = "0%";
 
-  speakText(phase.name + ". " + phase.desc, 200);
+  speakPrana(phase.name + ". " + phase.desc, 200);
   setTimeout(()=>startPranaStep(), 2000);
   startPranaClocks();
 }
@@ -1178,7 +1204,7 @@ function startPranaStep() {
     "Step " + (stepIdx+1) + " / " + steps.length;
 
   // Speak the instruction
-  speakText(step.text);
+  speakPrana(step.text);
 
   // If step.dur === 0 → looping step — run until phase time expires
   if(step.dur === 0) {
@@ -1230,7 +1256,7 @@ function nextPranaPhase() {
   if(pranaState.phaseIdx >= PRANAYAMA_BASE.length) {
     endPranayama(); return;
   }
-  speakText("Excellent. Now we begin " + PRANAYAMA_BASE[pranaState.phaseIdx].name + ".", 300);
+  speakPrana("Excellent. Now we begin " + PRANAYAMA_BASE[pranaState.phaseIdx].name + ".", 300);
   setTimeout(()=>startPranaPhase(), 2500);
 }
 
@@ -1238,9 +1264,8 @@ function endPranayama() {
   clearPranaTimers();
   pranaState.active = false;
   releaseWakeLock();
-  speakText(
-    "Pranayama complete. Sit quietly for a moment. " +
-    "Feel the stillness within. Namaste. Om Shanti Shanti Shanti.",
+  speakPrana(
+    "Pranayama complete. Sit quietly for a moment. Namaste. Om Shanti.",
     400
   );
   document.getElementById("prana-step").textContent    = "🙏 Practice complete. Namaste.";
@@ -1376,6 +1401,7 @@ function openSettings() {
   togSet("tog-auto",    cfg.autoOn);
   togSet("tog-prana",   cfg.pranayamaAuto !== false);
   document.getElementById("cfg-prana-min").value  = cfg.pranayamaMinutes || 20;
+  document.getElementById("cfg-prana-lang").value = cfg.pranaLang || "en";
   togSet("tog-alarm", cfg.alarmOn !== false);
   document.getElementById("cfg-alarm-time").value =
     String(cfg.alarmHour||5).padStart(2,"0") + ":" +
@@ -1401,6 +1427,7 @@ function closeSettings() {
   cfg.autoOn           = togGet("tog-auto");
   cfg.pranayamaAuto    = togGet("tog-prana");
   cfg.pranayamaMinutes = parseInt(document.getElementById("cfg-prana-min").value)||20;
+  cfg.pranaLang        = document.getElementById("cfg-prana-lang").value || "en";
   cfg.alarmOn          = togGet("tog-alarm");
   const aTime = document.getElementById("cfg-alarm-time").value || "05:00";
   const [aH, aM] = aTime.split(":").map(Number);
@@ -1514,11 +1541,7 @@ function checkDayRollover() {
   }
 }
 
-// Re-check ONLY when user opens / returns to the app — zero battery drain
-document.addEventListener("visibilitychange", ()=>{
-  if(document.visibilityState === "visible") checkDayRollover();
-});
-// No setInterval — visibilitychange + midnight setTimeout covers everything
+// visibilitychange handled in unified handler below
 
 // Schedule exact midnight trigger
 function scheduleMidnight() {
@@ -1670,22 +1693,51 @@ function fireAlarm() {
 }
 
 function scheduleAlarm() {
-  // Clear any existing alarm timer
   if(_alarmTimeout) { clearTimeout(_alarmTimeout); _alarmTimeout = null; }
-  if(!cfg.alarmOn) {
-    setStatus("Alarm off");
-    return;
-  }
+  if(!cfg.alarmOn) { setStatus("Alarm off"); return; }
+
   const h  = cfg.alarmHour   || 5;
   const m  = cfg.alarmMinute || 0;
   const ms = msUntilAlarm(h, m);
-  _alarmTimeout = setTimeout(fireAlarm, ms);
-  const mins = Math.round(ms / 60000);
-  const hrs  = Math.floor(mins / 60);
-  const rem  = mins % 60;
-  const timeStr = hrs > 0 ? hrs+"h "+rem+"m" : rem+"m";
-  setStatus("Alarm set: " + fmtAlarmTime(h,m) + " (in " + timeStr + ")");
-  console.log("Alarm scheduled for", fmtAlarmTime(h,m), "in", timeStr);
+
+  // OxygenOS kills setTimeout > ~1 hour when screen is off.
+  // So: only set setTimeout if alarm is within 90 minutes.
+  // Otherwise rely on visibilitychange to reschedule when user opens app.
+  if(ms <= 90 * 60 * 1000) {
+    _alarmTimeout = setTimeout(fireAlarm, ms);
+    const secs = Math.round(ms / 1000);
+    setStatus("Alarm fires in " + secs + "s — keep app open!");
+  } else {
+    // Show system alarm instruction banner
+    const hrs = Math.floor(ms / 3600000);
+    const rem = Math.floor((ms % 3600000) / 60000);
+    setStatus("⏰ Alarm: " + fmtAlarmTime(h,m) + " · Open app before " + fmtAlarmTime(h,m) + " to activate");
+    // Try Android system alarm (works in TWA/installed PWA on some devices)
+    _tryAndroidAlarm(h, m);
+  }
+  console.log("Alarm config: " + fmtAlarmTime(h,m) + " | ms until:", ms);
+}
+
+function _tryAndroidAlarm(h, m) {
+  // Works on Android Chrome when app is installed as PWA (Add to Home Screen)
+  // Opens Clock app silently and creates alarm
+  try {
+    const intent = "intent://alarm#Intent;" +
+      "action=android.intent.action.SET_ALARM;" +
+      "extra.android.intent.extra.alarm.HOUR=" + h + ";" +
+      "extra.android.intent.extra.alarm.MINUTES=" + m + ";" +
+      "extra.android.intent.extra.alarm.MESSAGE=" +
+        encodeURIComponent("वैभव - सूर्यसारथी.१ॐ८") + ";" +
+      "extra.android.intent.extra.alarm.SKIP_UI=true;" +
+      "extra.android.intent.extra.alarm.VIBRATE=true;" +
+      "end";
+    const a = document.createElement("a");
+    a.href = intent; a.style.display = "none";
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+  } catch(e) {
+    // Silently ignore — not supported in browser, works in native app
+  }
 }
 
 function cancelAlarm() {
@@ -1693,14 +1745,7 @@ function cancelAlarm() {
   setStatus("Alarm cancelled");
 }
 
-// Re-schedule alarm when app comes back to foreground
-// (Android may have killed the setTimeout while phone was sleeping)
-document.addEventListener("visibilitychange", ()=>{
-  if(document.visibilityState === "visible" && cfg.alarmOn) {
-    scheduleAlarm();        // reset the timer accurately
-    checkMorningGreeting(); // greet if within 60 min of alarm time
-  }
-});
+// visibilitychange handled in unified handler below
 
 // SW message listener (for future SW-based alarm)
 navigator.serviceWorker && navigator.serviceWorker.addEventListener("message", e=>{
@@ -1708,6 +1753,19 @@ navigator.serviceWorker && navigator.serviceWorker.addEventListener("message", e
     const goal = todayGoal();
     speakText("Good morning! Today target is " + goal + " rounds. Om.");
   }
+});
+
+// ── UNIFIED visibilitychange — one handler, no duplicates ──────
+document.addEventListener("visibilitychange", async () => {
+  if(document.visibilityState !== "visible") return;
+  // 1. Re-acquire wake lock if session active
+  if(sess.active && !sess.paused) await acquireWakeLock();
+  // 2. Check if day rolled over while phone was sleeping
+  checkDayRollover();
+  // 3. Reschedule alarm timer (OxygenOS may have killed it)
+  if(cfg.alarmOn) scheduleAlarm();
+  // 4. Greet if opened near alarm time
+  checkMorningGreeting();
 });
 
 /* ── Init ────────────────────────────────────────────────────── */
