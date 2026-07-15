@@ -17,7 +17,7 @@ const STEPS = [
 ];
 
 const CIRC = 2 * Math.PI * 98;
-const KEY  = "surya-v33";
+const KEY  = "surya-v36";
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -112,7 +112,9 @@ function setTodayGoal(n) {
 /* ── Persist ─────────────────────────────────────────────────── */
 function loadAll() {
   // All previous versions — newest first so we get the most recent data
+  // ALL versions ever released — newest first so best data is picked first
   const OLD_KEYS = [
+    "surya-v33","surya-v32","surya-v31","surya-v30","surya-v29",
     "surya-v28","surya-v27","surya-v26","surya-v25","surya-v24","surya-v23",
     "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18","surya-v17",
     "surya-v16","surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
@@ -162,19 +164,25 @@ function loadAll() {
   }
 
   try {
+    const TODAY = new Date().toISOString().slice(0,10);
     const curRaw = localStorage.getItem(KEY);
 
     if(curRaw) {
-      // ── Current key exists: just load it, NO migration needed ───
+      // ── Current key exists — load it exactly, protect today's data ──────
       const sv = parseSave(curRaw);
       if(sv) {
         Object.assign(cfg,  sv.cfg  || {});
         Object.assign(data, sv.data || {});
-        Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
+        Object.keys(data.history).forEach(k => {
+          data.history[k] = normRec(data.history[k]);
+        });
+        // totalAllTime, totalTimeMs, today's sets and time are AUTHORITATIVE
+        // as stored — never recompute, never override. completeSet() is the
+        // only function allowed to increment these.
       }
 
     } else {
-      // ── First time with this key: collect & merge all old saves ─
+      // ── First-time load with new key — one-time migration from old keys ──
       const allRaws = [];
       for(const ok of OLD_KEYS) {
         const r = localStorage.getItem(ok);
@@ -182,59 +190,96 @@ function loadAll() {
       }
 
       if(allRaws.length > 0) {
-        // Parse all old saves
         const parsed = [];
         for(const s of allRaws) {
-          try { const p = parseSave(s.raw); if(p) parsed.push({ key:s.key, ...p }); }
-          catch(e) { console.warn("Could not parse", s.key); }
+          try {
+            const p = parseSave(s.raw);
+            if(p) parsed.push({ key:s.key, ...p });
+          } catch(e) { console.warn("Could not parse", s.key); }
         }
 
         if(parsed.length > 0) {
-          // Pick the best base: highest programDay, then highest totalAllTime
-          parsed.sort((a,b) => {
-            const dd = (b.data.programDay||0) - (a.data.programDay||0);
-            return dd !== 0 ? dd : (b.data.totalAllTime||0) - (a.data.totalAllTime||0);
-          });
+          // ── Pick best base: highest totalAllTime = most complete ──────────
+          parsed.sort((a,b) =>
+            (b.data.totalAllTime||0) - (a.data.totalAllTime||0)
+          );
           const base = parsed[0];
           Object.assign(cfg,  base.cfg  || {});
           Object.assign(data, base.data || {});
-          Object.keys(data.history).forEach(k => { data.history[k] = normRec(data.history[k]); });
+          Object.keys(data.history).forEach(k => {
+            data.history[k] = normRec(data.history[k]);
+          });
 
-          // Merge history from every other old save (don't overwrite cfg/data fields)
-          for(let i = 1; i < parsed.length; i++) {
-            mergeHistory(parsed[i].data.history || {});
+          // ── Snapshot today's values from the BEST save BEFORE merging ────
+          // "Best" for today = highest sets count for today's date
+          let todayBestSets  = data.history[TODAY]?.sets   || 0;
+          let todayBestTime  = data.history[TODAY]?.timeMs || 0;
+          let todayBestGoal  = data.history[TODAY]?.goal   || 0;
+          let bestTotalSets  = data.totalAllTime || 0;
+          let bestTotalTime  = data.totalTimeMs  || 0;
+
+          // Check all old saves for a higher today-count
+          for(const p of parsed) {
+            const tr = normRec(p.data.history?.[TODAY] || {});
+            if(tr.sets > todayBestSets) {
+              todayBestSets = tr.sets;
+              todayBestTime = Math.max(todayBestTime, tr.timeMs);
+            }
+            if((p.data.totalAllTime||0) > bestTotalSets)
+              bestTotalSets = p.data.totalAllTime;
+            if((p.data.totalTimeMs||0)  > bestTotalTime)
+              bestTotalTime = p.data.totalTimeMs;
           }
 
-          // Recompute totals from merged history
-          const histSets = Object.values(data.history).reduce((s,r)=>s+(r.sets||0),0);
-          const histTime = Object.values(data.history).reduce((s,r)=>s+(r.timeMs||0),0);
-          data.totalAllTime = Math.max(data.totalAllTime||0, histSets);
-          data.totalTimeMs  = Math.max(data.totalTimeMs||0,  histTime);
+          // ── Merge ONLY missing past dates — never overwrite existing ──────
+          for(let i = 1; i < parsed.length; i++) {
+            const srcHist = parsed[i].data.history || {};
+            Object.keys(srcHist).forEach(date => {
+              if(date === TODAY) return;      // handle today separately
+              if(!data.history[date]) {
+                data.history[date] = normRec(srcHist[date]);
+              }
+              // Existing past dates — left untouched (base is authoritative)
+            });
+          }
 
-          console.log("ONE-TIME migration | sources:", parsed.length,
-            "| sets:", data.totalAllTime,
-            "| days:", Object.keys(data.history).length);
+          // ── Restore today's best values (highest sets wins) ───────────────
+          data.history[TODAY] = {
+            sets  : todayBestSets,
+            timeMs: todayBestTime,
+            goal  : todayBestGoal,
+          };
 
-          // Protect today's manual goal — if current save had a baseGoal
-          // for today, restore it (migration may have overwritten with old value)
+          // ── Restore totals — never reduce them ───────────────────────────
+          data.totalAllTime = bestTotalSets;
+          data.totalTimeMs  = bestTotalTime;
+
+          // ── Restore today's manual goal if any save has one for today ─────
           for(const s of allRaws) {
             try {
               const p = parseSave(s.raw);
               if(!p) continue;
-              const pd = p.data;
-              // If this save has a goalDate matching today, it's the most recent manual set
-              if(pd.goalDate && pd.goalDate === new Date().toISOString().slice(0,10)) {
-                data.baseGoal = pd.baseGoal || 0;
-                data.goalDate = pd.goalDate;
-                data.lastGoal = pd.lastGoal || pd.baseGoal || 0;
+              if(p.data.goalDate === TODAY && (p.data.baseGoal||0) > 0) {
+                data.baseGoal = p.data.baseGoal;
+                data.goalDate = TODAY;
+                data.lastGoal = p.data.lastGoal || p.data.baseGoal;
+                break;
               }
             } catch(e) {}
           }
 
+          console.log(
+            "ONE-TIME migration complete | sources:", parsed.length,
+            "| totalSets:", data.totalAllTime,
+            "| totalTime:", Math.round((data.totalTimeMs||0)/60000) + "min",
+            "| today sets:", todayBestSets,
+            "| history days:", Object.keys(data.history).length
+          );
+
           // Save under new key immediately
           try { localStorage.setItem(KEY, JSON.stringify({cfg, data})); } catch(e){}
 
-          // Clear old keys so migration never re-runs again
+          // Delete old keys — migration runs exactly once
           for(const s of allRaws) {
             try { localStorage.removeItem(s.key); } catch(e){}
           }
@@ -1444,8 +1489,7 @@ function closeSettings() {
   cfg.alarmHour   = isNaN(aH) ? 5  : aH;
   cfg.alarmMinute = isNaN(aM) ? 0  : aM;
   voiceMuted      = !cfg.voiceOn;
-  scheduleAlarm();   // save alarm config + register sync
-  saveAlarmConfig();
+  scheduleAlarm();   // reschedule with new time
   cfg.chartDays = parseInt(document.getElementById("cfg-chart-days").value) || 21;
   cfg.chartMode = document.getElementById("cfg-chart-mode").value || "bar";
   saveAll(); render();
@@ -1625,56 +1669,6 @@ async function requestNotificationPermission() {
   return result === "granted";
 }
 
-function fmtAlarmTime(h, m) {
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hh   = h % 12 || 12;
-  const mm   = String(m).padStart(2, "0");
-  return hh + ":" + mm + " " + ampm;
-}
-
-// Store alarm config in localStorage so SW can read it
-function saveAlarmConfig() {
-  try {
-    localStorage.setItem("surya-alarm-cfg", JSON.stringify({
-      on    : cfg.alarmOn,
-      hour  : cfg.alarmHour   || 5,
-      minute: cfg.alarmMinute || 0,
-    }));
-  } catch(e) {}
-}
-
-// Register periodic background sync (Chrome 80+ on Android)
-async function registerPeriodicSync() {
-  if(!("serviceWorker" in navigator)) return;
-  try {
-    const reg    = await navigator.serviceWorker.ready;
-    const status = await navigator.permissions.query({ name:"periodic-background-sync" });
-    if(status.state === "granted" && reg.periodicSync) {
-      await reg.periodicSync.register("surya-daily-alarm", { minInterval: 12*60*60*1000 });
-      console.log("Periodic background sync registered");
-    }
-  } catch(e) { console.log("periodicSync not available:", e.message); }
-}
-
-// Trigger SW notification immediately (works when SW is active)
-async function triggerSWNotification(title, body) {
-  if(!("serviceWorker" in navigator)) return false;
-  if(Notification.permission !== "granted") return false;
-  try {
-    const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification(title, {
-      body,
-      icon   : "./icon-192.png",
-      badge  : "./icon-192.png",
-      tag    : "surya-alarm",
-      renotify: true,
-      vibrate: [300, 150, 300, 150, 600],
-      data   : { url: "./" },
-    });
-    return true;
-  } catch(e) { console.warn("SW notification failed:", e); return false; }
-}
-
 // ── Morning greeting: fires when app opened near alarm time ─────
 function checkMorningGreeting() {
   if(!cfg.alarmOn) return;
@@ -1746,28 +1740,22 @@ function fireAlarm() {
 
 function scheduleAlarm() {
   if(_alarmTimeout) { clearTimeout(_alarmTimeout); _alarmTimeout = null; }
-  if(!cfg.alarmOn) { setStatus("Alarm off"); return; }
+  if(!cfg.alarmOn) return;
 
   const h  = cfg.alarmHour   || 5;
   const m  = cfg.alarmMinute || 0;
   const ms = msUntilAlarm(h, m);
 
-  // OxygenOS kills setTimeout > ~1 hour when screen is off.
-  // So: only set setTimeout if alarm is within 90 minutes.
-  // Otherwise rely on visibilitychange to reschedule when user opens app.
+  // Only set setTimeout if alarm is within 90 min — OxygenOS kills longer timers.
+  // visibilitychange re-schedules every time you open the app, so it stays accurate.
   if(ms <= 90 * 60 * 1000) {
     _alarmTimeout = setTimeout(fireAlarm, ms);
-    const secs = Math.round(ms / 1000);
-    setStatus("Alarm fires in " + secs + "s — keep app open!");
+    console.log("Alarm timer set — fires in", Math.round(ms/1000), "sec");
   } else {
-    // Show system alarm instruction banner
-    const hrs = Math.floor(ms / 3600000);
-    const rem = Math.floor((ms % 3600000) / 60000);
-    setStatus("⏰ Alarm: " + fmtAlarmTime(h,m) + " · Open app before " + fmtAlarmTime(h,m) + " to activate");
-    // Try Android system alarm (works in TWA/installed PWA on some devices)
+    // Try Android system alarm (works in TWA; silently ignored in browser)
     _tryAndroidAlarm(h, m);
+    console.log("Alarm: next at", fmtAlarmTime(h,m), "in", Math.round(ms/60000), "min");
   }
-  console.log("Alarm config: " + fmtAlarmTime(h,m) + " | ms until:", ms);
 }
 
 function _tryAndroidAlarm(h, m) {
@@ -1822,11 +1810,86 @@ document.addEventListener("visibilitychange", async () => {
   checkMorningGreeting();
 });
 
+
+/* ── Data Recovery Scanner ─────────────────────────────────────
+   Scans every possible localStorage key and shows what's found.
+   Called from Settings "Scan & Recover" button.
+──────────────────────────────────────────────────────────────── */
+function scanAndRecover() {
+  const ALL_KEYS = [
+    "surya-v36","surya-v33","surya-v32","surya-v31","surya-v30","surya-v29",
+    "surya-v28","surya-v27","surya-v26","surya-v25","surya-v24","surya-v23",
+    "surya-v22","surya-v21","surya-v20","surya-v19","surya-v18","surya-v17",
+    "surya-v16","surya-v15","surya-v14","surya-v13","surya-v12","surya-v11",
+    "surya-v10","surya-v9","surya-v8","surya-v7","surya-v6","surya-v5",
+    "surya-v4","surya-v3","surya-v2","surya-v1","surya-namaskara-data-v1","surya-v0"
+  ];
+
+  const found = [];
+  for(const k of ALL_KEYS) {
+    const raw = localStorage.getItem(k);
+    if(!raw) continue;
+    try {
+      const sv  = JSON.parse(raw);
+      const d   = sv.data || sv;  // handle flat and nested formats
+      const sets = d.totalAllTime || 0;
+      const days = Object.keys(d.history || {}).length;
+      const timeMs = d.totalTimeMs || 0;
+      found.push({ key:k, sets, days, timeMs });
+    } catch(e) { found.push({ key:k, sets:"?", days:"?", timeMs:0 }); }
+  }
+
+  if(found.length === 0) {
+    alert("No saved data found in any version key.\nAll data appears to have been cleared.");
+    return;
+  }
+
+  // Show found keys
+  let msg = "Found data in " + found.length + " version key(s):\n\n";
+  found.forEach(f => {
+    const mins = Math.round(f.timeMs / 60000);
+    msg += f.key + "\n  Sets: " + f.sets + " | Days: " + f.days + " | Time: " + mins + "min\n\n";
+  });
+
+  // Find best (most sets)
+  const best = found.reduce((a,b) => (b.sets > a.sets ? b : a), found[0]);
+  msg += "Best record: " + best.key + " (" + best.sets + " sets)\n\n";
+  msg += "Tap OK to RESTORE from " + best.key + " and save as current version.";
+
+  if(confirm(msg)) {
+    try {
+      const raw = localStorage.getItem(best.key);
+      const sv  = JSON.parse(raw);
+      const d   = sv.data || sv;
+      const c   = sv.cfg  || {};
+
+      // Load into current data
+      Object.assign(cfg,  c);
+      Object.assign(data, d);
+
+      // Normalise history
+      Object.keys(data.history).forEach(k => {
+        const v = data.history[k];
+        if(typeof v === "number") data.history[k] = {sets:v,timeMs:0,goal:0};
+        if(!data.history[k].timeMs) data.history[k].timeMs = 0;
+        if(!data.history[k].goal)   data.history[k].goal   = 0;
+      });
+
+      // Save under current key
+      localStorage.setItem(KEY, JSON.stringify({cfg, data}));
+      alert("Restored! Sets: " + data.totalAllTime + " | History days: " + Object.keys(data.history).length);
+      location.reload();
+    } catch(e) {
+      alert("Restore failed: " + e.message);
+    }
+  }
+}
+
 /* ── Init ────────────────────────────────────────────────────── */
 loadAll();
 saveAll();
 render();
 updateClockDisplay();
 scheduleRollover();   // schedule goal update at 4:01 AM
-scheduleAlarm();      // configure alarm + register periodic sync
+scheduleAlarm();      // schedule 5 AM alarm
 checkMorningGreeting(); // greet if user opens app near alarm time
