@@ -18,6 +18,7 @@ const STEPS = [
 
 const CIRC = 2 * Math.PI * 98;
 const KEY  = "surya-v36";
+let _goalRolledDate = "";  // tracks date for which 4:01 AM rollover already ran
 
 /* ── Config ─────────────────────────────────────────────────── */
 let cfg = {
@@ -31,8 +32,14 @@ let cfg = {
   autoOn        : true,
   poseSeconds   : 5,
   graceSeconds  : 5,
-  chartDays     : 7,    // history window: 7 → 14 → 21 (cycles)
-  chartMode     : "bar", // "bar" | "line"
+  chartDays         : 7,
+  chartMode         : "bar",
+  pranayamaMinutes  : 28,
+  pranayamaAuto     : true,
+  pranaLang         : "en",
+  alarmOn           : true,
+  alarmHour         : 5,
+  alarmMinute       : 0,
 };
 
 /* ── Data (persisted) ───────────────────────────────────────── */
@@ -427,22 +434,45 @@ function makeEnUtt(text) {
 function makePranaUtt(text) {
   const lang = cfg.pranaLang || "en";
   const u = new SpeechSynthesisUtterance(text);
+
+  // Always re-fetch voices list (may not be loaded on first call)
+  const vList = speechSynthesis.getVoices();
+
   if(lang === "hi") {
-    u.lang = "hi-IN"; u.rate = 0.80; u.pitch = 1.0; u.volume = 1.0;
-    const hv = voices.find(v=>v.lang==="hi-IN") || voices.find(v=>v.lang.startsWith("hi")) || null;
+    u.lang   = "hi-IN";
+    u.rate   = 0.62;   // slower for Hindi — easier to follow
+    u.pitch  = 1.0;
+    u.volume = 1.0;
+    const hv = vList.find(v=>v.lang==="hi-IN"&&v.localService)
+            || vList.find(v=>v.lang==="hi-IN")
+            || vList.find(v=>v.lang.startsWith("hi"))
+            || null;
     if(hv) u.voice = hv;
   } else if(lang === "mr") {
-    u.lang = "mr-IN"; u.rate = 0.78; u.pitch = 1.0; u.volume = 1.0;
-    const mv = voices.find(v=>v.lang==="mr-IN") || voices.find(v=>v.lang.startsWith("mr")) || null;
-    if(mv) u.voice = mv;
-    else { // fallback to hi-IN which understands Devanagari
+    u.lang   = "mr-IN";
+    u.rate   = 0.60;   // Marathi slightly slower
+    u.pitch  = 1.0;
+    u.volume = 1.0;
+    const mv = vList.find(v=>v.lang==="mr-IN"&&v.localService)
+            || vList.find(v=>v.lang==="mr-IN")
+            || vList.find(v=>v.lang.startsWith("mr"))
+            || null;
+    if(mv) {
+      u.voice = mv;
+    } else {
+      // Marathi TTS not installed — fall back to hi-IN (same Devanagari script)
       u.lang = "hi-IN";
-      const hv = voices.find(v=>v.lang==="hi-IN") || null;
+      const hv = vList.find(v=>v.lang==="hi-IN") || null;
       if(hv) u.voice = hv;
     }
   } else {
-    u.lang = "en-IN"; u.rate = 0.85; u.pitch = 1.05; u.volume = 1.0;
-    const ev = voices.find(v=>v.lang==="en-IN") || voices.find(v=>v.lang.startsWith("en")) || null;
+    u.lang   = "en-IN";
+    u.rate   = 0.68;   // slower English for better comprehension
+    u.pitch  = 1.0;
+    u.volume = 1.0;
+    const ev = vList.find(v=>v.lang==="en-IN")
+            || vList.find(v=>v.lang.startsWith("en"))
+            || null;
     if(ev) u.voice = ev;
   }
   return u;
@@ -466,9 +496,19 @@ function speakText(text, delay=0) {
   setTimeout(()=>{ qSpeak(makeEnUtt(text)); }, delay);
 }
 
+// Get pranayama text in the right language from a step object OR plain string
+function getPranaText(textOrObj) {
+  if(typeof textOrObj === "string") return textOrObj;
+  const lang = cfg.pranaLang || "en";
+  if(lang === "hi") return textOrObj.hi || textOrObj.en;
+  if(lang === "mr") return textOrObj.mr || textOrObj.hi || textOrObj.en;
+  return textOrObj.en;
+}
+
 // Speak pranayama instruction in selected language — queued
-function speakPrana(text, delay=0) {
+function speakPrana(textOrObj, delay=0) {
   if(voiceMuted || !window.speechSynthesis) return;
+  const text = getPranaText(textOrObj);
   setTimeout(()=>{ qSpeak(makePranaUtt(text)); }, delay);
 }
 
@@ -617,8 +657,9 @@ function completeSet() {
   const today=todayKey();
   if(!data.history[today]) data.history[today]={ sets:0, timeMs:0, goal:0 };
   data.history[today].sets += 1;
-  data.history[today].goal = todayGoal();
-  data.lastGoal = todayGoal();   // keep lastGoal current within the day
+  const _g = todayGoal();
+  data.history[today].goal = _g;
+  data.lastGoal = _g;   // always track so tomorrow = lastGoal + 4
   data.totalAllTime += 1;
   sess.breakAcc += 1;
   saveAll();
@@ -1088,100 +1129,172 @@ function _drawChart() {
    Total time is distributed proportionally to cfg.pranayamaMinutes
 ═══════════════════════════════════════════════════════════════ */
 
-// Base proportions (add to 100)
+// Each step has text in 3 languages — selected by cfg.pranaLang
+// dur = seconds before moving to next step (increased for comfortable following)
+// Ratios add to 100 — distributed across cfg.pranayamaMinutes (default 28 min)
 const PRANAYAMA_BASE = [
   {
-    id:"deep",
-    name:"Deep Breathing",
-    nameHi:"दीर्घ श्वसन",
-    ratio:10,   // 10% of total time
+    id:"deep", name:"Deep Breathing", nameHi:"दीर्घ श्वसन", nameMr:"दीर्घ श्वसन",
+    ratio:10,
     desc:"Slow deep belly breaths to prepare the body",
+    descHi:"शरीर को तैयार करने के लिए धीमी और गहरी साँसें",
+    descMr:"शरीर तयार करण्यासाठी मंद आणि खोल श्वास",
     steps:[
-      { text:"Sit comfortably with spine erect. Close your eyes.", dur:8 },
-      { text:"Breathe in slowly through both nostrils for 4 counts.", dur:6 },
-      { text:"Hold the breath gently for 2 counts.", dur:4 },
-      { text:"Exhale slowly for 6 counts. Feel the belly fall.", dur:8 },
-      { text:"Continue this deep rhythmic breathing.", dur:0 }, // loops
+      { en:"Sit comfortably with spine erect. Close your eyes.",
+        hi:"सीधे बैठें, रीढ़ सीधी रखें। आँखें बंद करें।",
+        mr:"सरळ बसा, मणका ताठ ठेवा। डोळे बंद करा.", dur:12 },
+      { en:"Breathe in slowly through both nostrils for 4 counts. One... two... three... four.",
+        hi:"दोनों नासिकाओं से धीरे-धीरे 4 गिनती तक श्वास लें। एक... दो... तीन... चार।",
+        mr:"दोन्ही नाकपुड्यांतून हळू हळू 4 मोजेपर्यंत श्वास घ्या.", dur:10 },
+      { en:"Hold the breath gently for 2 counts.",
+        hi:"2 गिनती तक श्वास को आराम से रोकें।",
+        mr:"2 मोजेपर्यंत श्वास हळूच थांबवा.", dur:6 },
+      { en:"Exhale slowly for 6 counts. Feel the belly fall. One... two... three... four... five... six.",
+        hi:"6 गिनती तक धीरे-धीरे श्वास छोड़ें। पेट को नीचे जाते महसूस करें।",
+        mr:"6 मोजेपर्यंत हळू हळू श्वास सोडा. पोट खाली जाताना जाणवा.", dur:12 },
+      { en:"Continue this deep rhythmic breathing. Inhale for 4, hold 2, exhale for 6.",
+        hi:"इसी लय में श्वास लेते रहें। 4 गिनती लें, 2 रोकें, 6 में छोड़ें।",
+        mr:"याच लयीत श्वास घेत राहा. 4 आत, 2 थांबा, 6 बाहेर.", dur:0 },
     ],
-    inhale:4, hold:2, exhale:6, rounds:-1, // -1 = time-based
+    rounds:-1,
   },
   {
-    id:"anulom",
-    name:"Anulom Vilom",
-    nameHi:"अनुलोम विलोम",
-    ratio:32,
-    desc:"Alternate nostril breathing — balances left and right energy channels",
+    id:"anulom", name:"Anulom Vilom", nameHi:"अनुलोम विलोम", nameMr:"अनुलोम विलोम",
+    ratio:28,
+    desc:"Alternate nostril breathing — balances energy channels",
+    descHi:"अनुलोम विलोम — ऊर्जा नाड़ियों को संतुलित करता है",
+    descMr:"अनुलोम विलोम — ऊर्जा नाड्या संतुलित करते",
     steps:[
-      { text:"Right hand in Nasagra mudra. Close right nostril with thumb.", dur:6 },
-      { text:"Inhale through LEFT nostril for 4 counts.", dur:5 },
-      { text:"Close both nostrils. Hold for 2 counts.", dur:4 },
-      { text:"Release right nostril. Exhale through RIGHT for 8 counts.", dur:9 },
-      { text:"Inhale through RIGHT nostril for 4 counts.", dur:5 },
-      { text:"Close both. Hold for 2 counts.", dur:4 },
-      { text:"Release left nostril. Exhale through LEFT for 8 counts.", dur:9 },
-      { text:"This completes one round. Continue.", dur:0 },
+      { en:"Bring your right hand to Nasagra mudra. Use thumb to close right nostril.",
+        hi:"दाहिना हाथ नासाग्र मुद्रा में लाएं। अंगूठे से दाहिनी नासिका बंद करें।",
+        mr:"उजवा हात नासाग्र मुद्रेत आणा. अंगठ्याने उजवी नाकपुडी बंद करा.", dur:10 },
+      { en:"Inhale slowly through LEFT nostril for 4 counts. One... two... three... four.",
+        hi:"बाईं नासिका से 4 गिनती तक धीरे-धीरे श्वास लें।",
+        mr:"डाव्या नाकपुडीतून 4 मोजेपर्यंत हळू श्वास घ्या.", dur:8 },
+      { en:"Close both nostrils. Hold for 2 counts.",
+        hi:"दोनों नासिकाएं बंद करें। 2 गिनती रोकें।",
+        mr:"दोन्ही नाकपुड्या बंद करा. 2 मोजे थांबा.", dur:6 },
+      { en:"Release right nostril. Exhale slowly through RIGHT for 8 counts.",
+        hi:"दाहिनी नासिका खोलें। 8 गिनती में दाहिनी से धीरे श्वास छोड़ें।",
+        mr:"उजवी नाकपुडी उघडा. 8 मोजेपर्यंत उजव्या नाकपुडीतून हळू श्वास सोडा.", dur:12 },
+      { en:"Now inhale through RIGHT nostril for 4 counts.",
+        hi:"अब दाहिनी नासिका से 4 गिनती में श्वास लें।",
+        mr:"आता उजव्या नाकपुडीतून 4 मोजेपर्यंत श्वास घ्या.", dur:8 },
+      { en:"Close both nostrils. Hold for 2 counts.",
+        hi:"दोनों नासिकाएं बंद करें। 2 गिनती रोकें।",
+        mr:"दोन्ही बंद करा. 2 मोजे थांबा.", dur:6 },
+      { en:"Release left nostril. Exhale slowly through LEFT for 8 counts. One round complete.",
+        hi:"बाईं नासिका खोलें। 8 गिनती में बाईं से श्वास छोड़ें। एक चक्र पूरा।",
+        mr:"डावी नाकपुडी उघडा. 8 मोजेपर्यंत डाव्या नाकपुडीतून श्वास सोडा. एक फेरी पूर्ण.", dur:12 },
+      { en:"Continue. Inhale left, hold, exhale right. Inhale right, hold, exhale left.",
+        hi:"जारी रखें। बाईं से लें, रोकें, दाईं से छोड़ें। दाईं से लें, रोकें, बाईं से छोड़ें।",
+        mr:"सुरू ठेवा. डावीकडून घ्या, थांबा, उजवीकडून सोडा.", dur:0 },
     ],
-    inhale:4, hold:2, exhale:8, rounds:-1,
+    rounds:-1,
   },
   {
-    id:"nadi",
-    name:"Nadi Shodhana",
-    nameHi:"नाडी शोधन",
+    id:"nadi", name:"Nadi Shodhana", nameHi:"नाडी शोधन", nameMr:"नाडी शोधन",
     ratio:18,
-    desc:"Purification of energy channels — deeper ratio 1:4:2",
+    desc:"Purification of energy channels — deeper 1:4:2 ratio",
+    descHi:"नाड़ी शोधन — गहरे अनुपात 1:4:2 में",
+    descMr:"नाडी शोधन — खोल प्रमाण 1:4:2",
     steps:[
-      { text:"Nadi Shodhana — extended ratio. Inhale through LEFT for 4 counts.", dur:5 },
-      { text:"Retain breath with both nostrils closed for 16 counts.", dur:17 },
-      { text:"Exhale through RIGHT nostril for 8 counts.", dur:9 },
-      { text:"Inhale RIGHT for 4 counts.", dur:5 },
-      { text:"Retain for 16 counts.", dur:17 },
-      { text:"Exhale LEFT for 8 counts.", dur:9 },
-      { text:"One round complete. Continue gently.", dur:0 },
+      { en:"Nadi Shodhana with extended ratio. Inhale through LEFT nostril for 4 counts.",
+        hi:"नाडी शोधन — विस्तारित अनुपात। बाईं नासिका से 4 गिनती में श्वास लें।",
+        mr:"नाडी शोधन — विस्तारित प्रमाण. डाव्या नाकपुडीतून 4 मोजेपर्यंत श्वास घ्या.", dur:8 },
+      { en:"Retain breath. Both nostrils closed. Hold for 16 counts. This is internal retention.",
+        hi:"श्वास रोकें। दोनों नासिकाएं बंद। 16 गिनती तक रोकें। यह आंतरिक कुंभक है।",
+        mr:"श्वास थांबवा. दोन्ही नाकपुड्या बंद. 16 मोजेपर्यंत थांबा.", dur:20 },
+      { en:"Exhale through RIGHT nostril for 8 counts. Slow and complete.",
+        hi:"दाहिनी नासिका से 8 गिनती में पूरी तरह श्वास छोड़ें।",
+        mr:"उजव्या नाकपुडीतून 8 मोजेपर्यंत पूर्णपणे श्वास सोडा.", dur:12 },
+      { en:"Inhale through RIGHT for 4 counts.",
+        hi:"दाहिनी से 4 गिनती में श्वास लें।",
+        mr:"उजव्याकडून 4 मोजेपर्यंत श्वास घ्या.", dur:8 },
+      { en:"Retain. Hold for 16 counts.",
+        hi:"रोकें। 16 गिनती तक रोकें।",
+        mr:"थांबा. 16 मोजेपर्यंत थांबा.", dur:20 },
+      { en:"Exhale through LEFT for 8 counts. One round complete. Continue gently.",
+        hi:"बाईं से 8 गिनती में छोड़ें। एक चक्र पूरा। धीरे जारी रखें।",
+        mr:"डाव्याकडून 8 मोजेपर्यंत सोडा. एक फेरी पूर्ण. हळू सुरू ठेवा.", dur:12 },
+      { en:"Continue the cycle. Breathe with awareness. 4 counts in, 16 hold, 8 out.",
+        hi:"चक्र जारी रखें। सजगता से श्वास लें। 4 अंदर, 16 रोकें, 8 बाहर।",
+        mr:"फेरी सुरू ठेवा. 4 आत, 16 थांबा, 8 बाहेर.", dur:0 },
     ],
-    inhale:4, hold:16, exhale:8, rounds:-1,
+    rounds:-1,
   },
   {
-    id:"kapalabhati",
-    name:"Kapalabhati",
-    nameHi:"कपालभाती",
-    ratio:12,
+    id:"kapalabhati", name:"Kapalabhati", nameHi:"कपालभाती", nameMr:"कपालभाती",
+    ratio:14,
     desc:"Skull-shining breath — forceful exhales, passive inhales",
+    descHi:"कपालभाती — तेज श्वास, पेट अंदर खींचना",
+    descMr:"कपालभाती — जोरदार श्वास, पोट आत ओढणे",
     steps:[
-      { text:"Sit tall. Take one deep breath in to prepare.", dur:5 },
-      { text:"Forceful sharp exhale through nose — pull navel in fast.", dur:3 },
-      { text:"Passive inhale — let breath come in naturally.", dur:2 },
-      { text:"Continue at a steady rhythmic pace — one stroke per second.", dur:0 },
-      { text:"After 30 strokes, take a deep breath and retain briefly.", dur:8 },
-      { text:"Exhale slowly. Rest. Begin next round when ready.", dur:6 },
+      { en:"Sit tall. Take one slow deep breath to prepare yourself.",
+        hi:"सीधे बैठें। तैयारी के लिए एक धीमी और गहरी साँस लें।",
+        mr:"सरळ बसा. तयारीसाठी एक मंद खोल श्वास घ्या.", dur:10 },
+      { en:"Now begin. Forceful sharp exhale through nose. Pull the navel in strongly.",
+        hi:"शुरू करें। नाक से तेज झटकेदार श्वास छोड़ें। नाभि को जोर से अंदर खींचें।",
+        mr:"सुरुवात करा. नाकातून जोरात झटकेदार श्वास सोडा. नाभी जोरात आत ओढा.", dur:8 },
+      { en:"Passive inhale follows naturally. Do not force the inhale.",
+        hi:"अपने आप साँस अंदर आएगी। श्वास को जबरदस्ती मत लें।",
+        mr:"श्वास आपोआप आत येईल. जबरदस्ती करू नका.", dur:8 },
+      { en:"Continue the rhythm. One exhale per second. Thirty strokes per round.",
+        hi:"लय बनाए रखें। हर सेकंड में एक श्वास छोड़ें। तीस स्ट्रोक प्रति राउंड।",
+        mr:"लय ठेवा. प्रति सेकंद एक श्वास. तीस स्ट्रोक प्रति फेरी.", dur:0 },
+      { en:"After thirty strokes, take a deep inhale and hold briefly. Then exhale completely.",
+        hi:"तीस स्ट्रोक के बाद, गहरी साँस लें और थोड़ी देर रोकें। फिर पूरी तरह छोड़ें।",
+        mr:"तीस स्ट्रोक नंतर, खोल श्वास घ्या आणि थोडावेळ थांबा. मग पूर्णपणे सोडा.", dur:14 },
+      { en:"Rest for a moment. Breathe normally. Begin the next round when ready.",
+        hi:"थोड़ा आराम करें। सामान्य साँस लें। तैयार हो जाएं तो अगला राउंड शुरू करें।",
+        mr:"थोडा आराम करा. सामान्य श्वास घ्या. तयार असल्यास पुढची फेरी सुरू करा.", dur:10 },
     ],
-    rounds:3, strokesPerRound:30, // 3 rounds of 30 strokes
+    rounds:3, strokesPerRound:30,
   },
   {
-    id:"bhramari",
-    name:"Bhramari",
-    nameHi:"भ्रामरी",
-    ratio:15,
+    id:"bhramari", name:"Bhramari", nameHi:"भ्रामरी", nameMr:"भ्रामरी",
+    ratio:16,
     desc:"Humming bee breath — calms the nervous system",
+    descHi:"भ्रामरी — मधुमक्खी की गुनगुनाहट, नसों को शांत करती है",
+    descMr:"भ्रामरी — मधमाशीचा गुणगुणाट, मज्जासंस्था शांत करते",
     steps:[
-      { text:"Close ears with thumbs, eyes with index fingers gently.", dur:6 },
-      { text:"Take a deep inhale through both nostrils.", dur:5 },
-      { text:"On exhale, make a soft humming sound — like a bee. Mmmmm.", dur:8 },
-      { text:"Feel the vibration in your skull and chest.", dur:5 },
-      { text:"Inhale again and repeat the humming exhale.", dur:0 },
+      { en:"Close both ears gently with thumbs. Place index fingers lightly on closed eyes.",
+        hi:"अंगूठों से दोनों कान धीरे से बंद करें। तर्जनी उंगलियों को बंद आँखों पर हल्के से रखें।",
+        mr:"अंगठ्यांनी दोन्ही कान हळुवारपणे बंद करा. तर्जनी बोटे बंद डोळ्यांवर हळूच ठेवा.", dur:12 },
+      { en:"Take a slow deep inhale through both nostrils. Fill the lungs completely.",
+        hi:"दोनों नासिकाओं से धीरे-धीरे गहरी साँस लें। फेफड़ों को पूरी तरह भरें।",
+        mr:"दोन्ही नाकपुड्यांतून हळू खोल श्वास घ्या. फुफ्फुसे पूर्णपणे भरा.", dur:10 },
+      { en:"On the exhale, make a soft continuous humming sound. Mmmmmm. Feel the vibration.",
+        hi:"साँस छोड़ते हुए, धीमी लगातार गुनगुनाहट करें। म्म्म्म्म। कंपन महसूस करें।",
+        mr:"श्वास सोडताना मंद सतत गुणगुणाट करा. म्म्म्म. कंपन जाणवा.", dur:14 },
+      { en:"Feel the vibration in your skull, face, and chest. Let it spread through your body.",
+        hi:"कपाल, चेहरे और छाती में कंपन महसूस करें। इसे पूरे शरीर में फैलने दें।",
+        mr:"कपाळ, चेहरा आणि छातीमध्ये कंपन जाणवा. ते संपूर्ण शरीरात पसरू द्या.", dur:10 },
+      { en:"Inhale again and continue humming on exhale. Five repetitions total.",
+        hi:"फिर से साँस लें और छोड़ते हुए गुनगुनाहट जारी रखें। कुल पाँच बार।",
+        mr:"पुन्हा श्वास घ्या आणि सोडताना गुणगुणाट करा. एकूण पाच वेळा.", dur:0 },
     ],
     rounds:5,
   },
   {
-    id:"meditation",
-    name:"Quiet Meditation",
-    nameHi:"ध्यान",
-    ratio:13,
+    id:"meditation", name:"Quiet Meditation", nameHi:"ध्यान", nameMr:"ध्यान",
+    ratio:14,
     desc:"Silent awareness — let breath flow naturally",
+    descHi:"मौन ध्यान — श्वास को स्वाभाविक रूप से बहने दें",
+    descMr:"शांत ध्यान — श्वास नैसर्गिकरित्या वाहू द्या",
     steps:[
-      { text:"Release all techniques. Rest your hands on your knees.", dur:6 },
-      { text:"Observe the natural breath without controlling it.", dur:8 },
-      { text:"If thoughts arise, gently return attention to the breath.", dur:8 },
-      { text:"Rest in pure awareness. You are the witness.", dur:0 },
+      { en:"Release all techniques. Rest your hands on your knees, palms facing up.",
+        hi:"सभी तकनीकें छोड़ दें। हाथों को घुटनों पर रखें, हथेलियाँ ऊपर।",
+        mr:"सर्व तंत्रे सोडा. हात गुडघ्यांवर ठेवा, तळवे वर.", dur:12 },
+      { en:"Simply observe the natural breath. Do not control it. Just watch.",
+        hi:"केवल प्राकृतिक श्वास को देखें। उसे नियंत्रित मत करें। बस देखते रहें।",
+        mr:"फक्त नैसर्गिक श्वास निरीक्षण करा. नियंत्रण करू नका. फक्त पाहा.", dur:14 },
+      { en:"If thoughts arise, gently bring your attention back to the breath. No force.",
+        hi:"विचार आएं तो धीरे से ध्यान को श्वास पर वापस लाएं। जबरदस्ती नहीं।",
+        mr:"विचार आले तर हळूच लक्ष श्वासावर परत आणा. जबरदस्ती नाही.", dur:14 },
+      { en:"Rest in pure awareness. You are the witness. Breathe and simply be.",
+        hi:"शुद्ध जागरूकता में विश्राम करें। आप साक्षी हैं। श्वास लें और बस रहें।",
+        mr:"शुद्ध जागरूकतेत विश्रांती घ्या. तुम्ही साक्षी आहात. श्वास घ्या आणि फक्त राहा.", dur:0 },
     ],
     rounds:-1,
   },
@@ -1207,7 +1320,7 @@ function computePhaseDurations(totalMin) {
 }
 
 function showPranayama() {
-  pranaState.phaseDurs  = computePhaseDurations(cfg.pranayamaMinutes || 20);
+  pranaState.phaseDurs  = computePhaseDurations(cfg.pranayamaMinutes || 28);
   pranaState.phaseIdx   = 0;
   pranaState.stepIdx    = 0;
   pranaState.active     = true;
@@ -1228,7 +1341,7 @@ function startPranaPhase() {
   pranaState.stepIdx    = 0;
 
   // Update header
-  const totalMin = cfg.pranayamaMinutes || 20;
+  const totalMin = cfg.pranayamaMinutes || 28;
   document.getElementById("prana-title").textContent  = phase.name;
   document.getElementById("prana-title-hi").textContent = phase.nameHi;
   document.getElementById("prana-desc").textContent   = phase.desc;
@@ -1238,7 +1351,13 @@ function startPranaPhase() {
   // Phase progress bar reset
   document.getElementById("prana-phase-bar").style.width = "0%";
 
-  speakPrana(phase.name + ". " + phase.desc, 200);
+  const phaseName = (cfg.pranaLang==="hi" ? phase.nameHi :
+                     cfg.pranaLang==="mr" ? (phase.nameMr||phase.nameHi) :
+                     phase.name) || phase.name;
+  const phaseDesc = (cfg.pranaLang==="hi" ? phase.descHi :
+                     cfg.pranaLang==="mr" ? (phase.descMr||phase.descHi) :
+                     phase.desc) || phase.desc;
+  speakPrana(phaseName + ". " + phaseDesc, 200);
   setTimeout(()=>startPranaStep(), 2000);
   startPranaClocks();
 }
@@ -1254,12 +1373,12 @@ function startPranaStep() {
   const phaseDur = pranaState.phaseDurs[pranaState.phaseIdx];
 
   // Update UI
-  document.getElementById("prana-step").textContent  = step.text;
+  document.getElementById("prana-step").textContent  = getPranaText(step);
   document.getElementById("prana-step-num").textContent =
     "Step " + (stepIdx+1) + " / " + steps.length;
 
   // Speak the instruction
-  speakPrana(step.text);
+  speakPrana(getPranaText(step));
 
   // If step.dur === 0 → looping step — run until phase time expires
   if(step.dur === 0) {
@@ -1293,7 +1412,7 @@ function startPranaClocks() {
     const phaseMs   = pranaState.phaseDurs[pranaState.phaseIdx] || 1;
     const phaseEl   = Date.now() - pranaState.phaseStart;
     const phaseFrac = Math.min(1, phaseEl / phaseMs);
-    const totalMs   = (cfg.pranayamaMinutes||20) * 60000;
+    const totalMs   = (cfg.pranayamaMinutes||28) * 60000;
     const totalEl   = Date.now() - pranaState.totalStart;
     const totalFrac = Math.min(1, totalEl / totalMs);
     const remSec    = Math.max(0, Math.round((totalMs - totalEl) / 1000));
@@ -1455,7 +1574,7 @@ function openSettings() {
   togSet("tog-breath",  cfg.breathOn  !== false);
   togSet("tog-auto",    cfg.autoOn);
   togSet("tog-prana",   cfg.pranayamaAuto !== false);
-  document.getElementById("cfg-prana-min").value  = cfg.pranayamaMinutes || 20;
+  document.getElementById("cfg-prana-min").value  = cfg.pranayamaMinutes || 28;
   document.getElementById("cfg-prana-lang").value = cfg.pranaLang || "en";
   togSet("tog-alarm", cfg.alarmOn !== false);
   document.getElementById("cfg-alarm-time").value =
@@ -1481,7 +1600,7 @@ function closeSettings() {
   cfg.breathOn         = togGet("tog-breath");
   cfg.autoOn           = togGet("tog-auto");
   cfg.pranayamaAuto    = togGet("tog-prana");
-  cfg.pranayamaMinutes = parseInt(document.getElementById("cfg-prana-min").value)||20;
+  cfg.pranayamaMinutes = parseInt(document.getElementById("cfg-prana-min").value)||28;
   cfg.pranaLang        = document.getElementById("cfg-prana-lang").value || "en";
   cfg.alarmOn          = togGet("tog-alarm");
   const aTime = document.getElementById("cfg-alarm-time").value || "05:00";
@@ -1547,9 +1666,7 @@ if("serviceWorker" in navigator){
 ═══════════════════════════════════════════════════════════════ */
 
 // Track last rollover so it fires only once per day even on multiple app opens
-// stored as "YYYY-MM-DD" — the date for which goal was already advanced
-let _goalRolledDate = data.lastDate || "";
-
+// Initialised to "" and set properly in loadAll() after data is loaded
 function _doGoalRollover() {
   const today = todayKey();
 
