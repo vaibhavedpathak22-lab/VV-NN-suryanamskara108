@@ -51,8 +51,9 @@ let data = {
   lastDate      : "",
   baseGoal      : 0,    // today's goal (editable); 0 = auto from programDay
   goalDate      : "",   // date baseGoal was set for; resets +4 on new day
-  lastGoal      : 0,    // goal of last completed day — used for exact +4 calc
-  lastRecoveryAt: 0,    // totalAllTime count at which last recovery was triggered
+  lastGoal       : 0,    // goal of last completed day — used for exact +4 calc
+  lastRecoveryAt : 0,    // totalAllTime count at which last recovery was triggered
+  lastRolledDate : "",   // date on which 4:01 AM goal rollover last ran
 };
 
 /* ── Session (runtime) ──────────────────────────────────────── */
@@ -352,15 +353,9 @@ function loadAll() {
 
   voiceMuted = !cfg.voiceOn;
 
-  // Sync rollover tracker with stored lastDate
-  // If lastDate is today and it's past 4:01 AM, mark as already rolled
-  const _now = new Date();
-  if(data.lastDate === todayKey() &&
-    (_now.getHours() > 4 || (_now.getHours() === 4 && _now.getMinutes() >= 1))) {
-    _goalRolledDate = todayKey();
-  } else {
-    _goalRolledDate = data.lastDate || "";
-  }
+  // Restore rollover state from stored field
+  // lastRolledDate is set by _doGoalRollover() and persisted in data
+  _goalRolledDate = data.lastRolledDate || "";
 }
 function saveAll() {
   try { localStorage.setItem(KEY, JSON.stringify({cfg,data})); }
@@ -1670,16 +1665,30 @@ if("serviceWorker" in navigator){
 function _doGoalRollover() {
   const today = todayKey();
 
-  // Already rolled over for today — skip
+  // Already rolled over for today in this session — skip
   if(_goalRolledDate === today) return;
+
+  // lastDate is still today (opened and closed same day) — only skip
+  // if data.lastDate === today AND lastRolledDate === today (both match)
+  // This handles: app open yesterday, closed, reopened today after 4:01 AM
+  if(data.lastDate === today && data.lastRolledDate === today) {
+    _goalRolledDate = today; // sync runtime tracker
+    return;
+  }
+
   _goalRolledDate = today;
 
   const last = new Date((data.lastDate || today) + "T00:00:00");
   const cur  = new Date(today + "T00:00:00");
-  const daysMissed = Math.max(1, Math.round((cur - last) / 86400000));
+  const daysMissed = Math.max(0, Math.round((cur - last) / 86400000));
+
+  // If daysMissed is 0 it means lastDate was already today but
+  // lastRolledDate was a previous date — still need to advance goal
+  // Use 1 as minimum advance for programDay when this happens
+  const advance = Math.max(1, daysMissed);
 
   // Advance programDay
-  data.programDay = (data.programDay || 1) + daysMissed;
+  data.programDay = (data.programDay || 1) + advance;
 
   // Fill any skipped days in history with 0-sets records
   for(let d = 1; d < daysMissed; d++) {
@@ -1708,9 +1717,11 @@ function _doGoalRollover() {
   }
 
   // Clear manual override so today uses auto formula (lastGoal + 4)
-  data.baseGoal = 0;
-  data.goalDate = "";
-  data.lastDate = today;
+  data.baseGoal      = 0;
+  data.goalDate      = "";
+  data.lastDate      = today;
+  data.lastRolledDate = today;  // persist so next app open knows rollover ran
+  _goalRolledDate    = today;   // also update runtime tracker
 
   saveAll();
   render();
@@ -1789,18 +1800,56 @@ async function requestNotificationPermission() {
 // ── Morning greeting: fires when app opened near alarm time ─────
 function checkMorningGreeting() {
   if(!cfg.alarmOn) return;
-  const now  = new Date();
-  const ah   = cfg.alarmHour   || 5;
-  const am   = cfg.alarmMinute || 0;
+  const now      = new Date();
+  const ah       = cfg.alarmHour   || 5;
+  const am       = cfg.alarmMinute || 0;
   const alarmToday = new Date(now.getFullYear(),now.getMonth(),now.getDate(),ah,am,0);
-  const diffMin = (now - alarmToday) / 60000;
+  const diffMin  = (now - alarmToday) / 60000;
+
+  // Fire within 60 min window after alarm time
   if(diffMin >= 0 && diffMin <= 60) {
     const goal = todayGoal();
-    setTimeout(()=>speakText(
-      "Good morning Vaibhav! Time for Surya Namaskara. " +
-      "Today target is " + goal + " rounds. Om Mitraya Namaha."
-    ), 1000);
+    const q    = getTodayQuote();
+    const qText= getQuoteText(q);
+    const lang = cfg.pranaLang || "en";
+    const greetings = {
+      en:"Good morning Vaibhav! Today target is "+goal+" rounds. Om Mitraya Namaha.",
+      hi:"सुप्रभात वैभव! आज का लक्ष्य है "+goal+" राउंड। ॐ मित्राय नमः।",
+      mr:"सुप्रभात वैभव! आजचे लक्ष्य आहे "+goal+" फेऱ्या. ॐ मित्राय नमः.",
+    };
+    setTimeout(()=>{
+      _speakAlarmGreeting(greetings[lang]||greetings.en, qText, q.lang||lang);
+      showDailyQuoteCard(q);
+    }, 800);
   }
+
+  // Also check if opened via alarm notification URL param
+  if(window.location.search.includes("alarm=1")) {
+    history.replaceState({}, "", "./");  // clean URL
+    const goal = todayGoal();
+    const q    = getTodayQuote();
+    const qText= getQuoteText(q);
+    const lang = cfg.pranaLang || "en";
+    const greetings = {
+      en:"Good morning! Today target is "+goal+" rounds.",
+      hi:"सुप्रभात! आज का लक्ष्य "+goal+" राउंड।",
+      mr:"सुप्रभात! आजचे लक्ष्य "+goal+" फेऱ्या.",
+    };
+    setTimeout(()=>{
+      _speakAlarmGreeting(greetings[lang]||greetings.en, qText, q.lang||lang);
+      showDailyQuoteCard(q);
+    }, 1200);
+  }
+}
+
+function showDailyQuoteCard(q) {
+  const card = document.getElementById("quote-card");
+  if(!card) return;
+  const lang = cfg.pranaLang || "en";
+  document.getElementById("quote-text").textContent = getQuoteText(q);
+  document.getElementById("quote-src").textContent  = "— " + (q.src||q.source||"");
+  card.style.display = "block";
+  card.classList.add("show");
 }
 
 // ── Core alarm: setTimeout fires at exact alarm time ─────────
@@ -1821,38 +1870,95 @@ function fmtAlarmTime(h, m) {
 
 function fireAlarm() {
   if(!cfg.alarmOn) { scheduleAlarm(); return; }
+  // Trigger goal rollover at alarm time
+  checkDayRollover();
   const goal = todayGoal();
   const done = todayDone();
-  const msgs = [
-    "Good morning Vaibhav! Today target is " + goal + " rounds. Om Mitraya Namaha.",
-    "Surya Namaskara time! " + goal + " rounds today. You have done " + done + " already.",
-    "Wake up Vaibhav! Your " + goal + " Surya Namaskaras are waiting.",
-    "Om! Rise and shine. Today target " + goal + " rounds. Let us begin.",
-  ];
-  const msg = msgs[Math.floor(Math.random() * msgs.length)];
+  const q    = getTodayQuote();
+  const qText = getQuoteText(q);
+  const qLang = cfg.pranaLang || "en";
 
-  // Show notification banner
+  // Morning greeting in the selected language
+  const greetings = {
+    en: "Good morning Vaibhav! Time for Surya Namaskara. Today target is " + goal + " rounds.",
+    hi: "सुप्रभात वैभव! सूर्यनमस्कार का समय है। आज का लक्ष्य है " + goal + " राउंड।",
+    mr: "सुप्रभात वैभव! सूर्यनमस्काराची वेळ झाली. आजचे लक्ष्य आहे " + goal + " फेऱ्या.",
+  };
+  const greeting = greetings[qLang] || greetings.en;
+
+  // Full notification body = greeting + quote + source
+  const notifBody = greeting + "\n\n✨ " + qText + "\n— " + (q.src||q.source||"");
+
+  // Show notification with quote — tap opens app automatically
   if(Notification.permission === "granted") {
     try {
-      const n = new Notification("वैभव - सूर्यसारथी.१ॐ८", {
-        body   : msg,
-        icon   : "./icon-192.png",
-        badge  : "./icon-192.png",
-        tag    : "surya-daily-alarm",
-        renotify: true,
-        vibrate: [300,100,300,100,600],
-      });
-      n.onclick = ()=>{ window.focus(); n.close(); };
+      const reg = navigator.serviceWorker.controller;
+      if(reg) {
+        // Use SW notification — supports notificationclick for auto-open
+        navigator.serviceWorker.ready.then(sw => {
+          sw.showNotification("वैभव - सूर्यसारथी.१ॐ८", {
+            body   : notifBody,
+            icon   : "./icon-192.png",
+            badge  : "./icon-192.png",
+            tag    : "surya-daily-alarm",
+            renotify: true,
+            vibrate: [300,100,300,100,600],
+            data   : { url:"./index.html?alarm=1" },
+            actions: [{ action:"open", title:"Start Practice 🙏" }],
+          });
+        });
+      } else {
+        // Fallback: regular notification
+        const n = new Notification("वैभव - सूर्यसारथी.१ॐ८", {
+          body: notifBody, icon:"./icon-192.png", badge:"./icon-192.png",
+          tag:"surya-daily-alarm", renotify:true, vibrate:[300,100,300,100,600],
+        });
+        n.onclick = ()=>{ window.focus(); n.close(); };
+      }
     } catch(e) { console.warn("Notification error:", e); }
   }
 
-  // Speak if app is visible
+  // Speak greeting + quote if app is visible
   if(document.visibilityState === "visible") {
-    setTimeout(()=>speakText(msg), 500);
+    _speakAlarmGreeting(greeting, qText, q.lang || qLang);
   }
 
-  // Reschedule for tomorrow
-  scheduleAlarm();
+  // Store today's quote index so UI can display it
+  data._todayQuoteIdx = QUOTES.indexOf(q);
+  saveAll();
+
+  scheduleAlarm();  // reschedule for tomorrow
+}
+
+function _speakAlarmGreeting(greeting, quoteText, quoteLang) {
+  qClear();
+  // 1. Speak greeting in selected language
+  setTimeout(()=>{
+    const gu = new SpeechSynthesisUtterance(greeting);
+    gu.lang = cfg.pranaLang==="hi" ? "hi-IN" : cfg.pranaLang==="mr" ? "mr-IN" : "en-IN";
+    gu.rate = 0.78; gu.pitch = 1.0; gu.volume = 1.0;
+    const gv = speechSynthesis.getVoices().find(v=>v.lang===gu.lang)
+            || speechSynthesis.getVoices().find(v=>v.lang.startsWith(cfg.pranaLang||"en"))
+            || null;
+    if(gv) gu.voice = gv;
+    qSpeak(gu);
+  }, 400);
+
+  // 2. Speak motivational quote (600ms after greeting queued)
+  setTimeout(()=>{
+    const qu = new SpeechSynthesisUtterance(quoteText);
+    qu.lang  = quoteLang==="hi"?"hi-IN":quoteLang==="mr"?"mr-IN":"en-IN";
+    qu.rate  = 0.70; qu.pitch = 0.95; qu.volume = 1.0;
+    const qv = speechSynthesis.getVoices().find(v=>v.lang===qu.lang)
+            || null;
+    if(qv) qu.voice = qv;
+    qSpeak(qu);
+
+    // 3. Speak source
+    const su = new SpeechSynthesisUtterance("— " + quoteText.source);
+    su.lang = "en-IN"; su.rate = 0.65; su.pitch = 0.9; su.volume = 0.8;
+    qSpeak(su);
+  }, 800);
 }
 
 function scheduleAlarm() {
@@ -1876,24 +1982,35 @@ function scheduleAlarm() {
 }
 
 function _tryAndroidAlarm(h, m) {
-  // Works on Android Chrome when app is installed as PWA (Add to Home Screen)
-  // Opens Clock app silently and creates alarm
+  // Sets Android system alarm. When user taps the alarm notification,
+  // it opens the app URL with ?alarm=1 which triggers morning greeting + quote.
   try {
+    // Build the app URL that opens on alarm tap
+    const appUrl = (window.location.origin + window.location.pathname)
+                   .replace(/\/$/, "") + "/?alarm=1";
+
+    // Intent with app URL as ringtone action (opens app on dismiss)
     const intent = "intent://alarm#Intent;" +
       "action=android.intent.action.SET_ALARM;" +
       "extra.android.intent.extra.alarm.HOUR=" + h + ";" +
       "extra.android.intent.extra.alarm.MINUTES=" + m + ";" +
       "extra.android.intent.extra.alarm.MESSAGE=" +
-        encodeURIComponent("वैभव - सूर्यसारथी.१ॐ८") + ";" +
-      "extra.android.intent.extra.alarm.SKIP_UI=true;" +
+        encodeURIComponent("वैभव - सूर्यसारथी.१ॐ८ — " +
+          (cfg.alarmHour||5) + ":" +
+          String(cfg.alarmMinute||0).padStart(2,"0") + " — Open app for today's goal") + ";" +
+      "extra.android.intent.extra.alarm.SKIP_UI=false;" +
       "extra.android.intent.extra.alarm.VIBRATE=true;" +
       "end";
+
     const a = document.createElement("a");
-    a.href = intent; a.style.display = "none";
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a);
+    a.href = intent;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ try{document.body.removeChild(a);}catch(e){} }, 500);
+    console.log("Android alarm intent sent for", h+":"+String(m).padStart(2,"0"));
   } catch(e) {
-    // Silently ignore — not supported in browser, works in native app
+    console.log("Android alarm not supported in browser mode:", e.message);
   }
 }
 
@@ -1904,11 +2021,10 @@ function cancelAlarm() {
 
 // visibilitychange handled in unified handler below
 
-// SW message listener (for future SW-based alarm)
+// SW message: alarm notification was tapped → greet + quote
 navigator.serviceWorker && navigator.serviceWorker.addEventListener("message", e=>{
   if(e.data && e.data.type === "ALARM_FIRED") {
-    const goal = todayGoal();
-    speakText("Good morning! Today target is " + goal + " rounds. Om.");
+    checkMorningGreeting();
   }
 });
 
@@ -1927,6 +2043,286 @@ document.addEventListener("visibilitychange", async () => {
   checkMorningGreeting();
 });
 
+
+
+/* ═══════════════════════════════════════════════════════════════
+   MOTIVATIONAL QUOTES — Bhagavad Gita, documentaries, Hollywood,
+   Marathi proverbs, life wisdom. Rotates daily by day-of-year.
+═══════════════════════════════════════════════════════════════ */
+const QUOTES = [
+  // ── Bhagavad Gita (Shree Krishna) ───────────────────────────
+  { text:"कर्मण्येवाधिकारस्ते मा फलेषु कदाचन।",
+    trans:"You have the right to perform your duties, but never to the fruits of action.",
+    src:"Bhagavad Gita 2.47" },
+  { text:"योगस्थः कुरु कर्माणि सङ्गं त्यक्त्वा धनंजय।",
+    trans:"Be steadfast in yoga, O Arjuna. Perform your duty and abandon all attachment.",
+    src:"Bhagavad Gita 2.48" },
+  { text:"उद्धरेदात्मनाऽत्मानं नात्मानमवसादयेत्।",
+    trans:"Let a man lift himself by himself; let him not degrade himself.",
+    src:"Bhagavad Gita 6.5" },
+  { text:"नायमात्मा बलहीनेन लभ्यः।",
+    trans:"This Self cannot be attained by one without strength.",
+    src:"Mundaka Upanishad" },
+  { text:"Change is the law of the universe. You can be a millionaire or a pauper in an instant.",
+    trans:"बदलाव सृष्टीचा नियम आहे. क्षणात राजा होता येते, क्षणात रंक.",
+    src:"Shree Krishna, Bhagavad Gita" },
+  { text:"श्रेयान्स्वधर्मो विगुणः परधर्मात्स्वनुष्ठितात्।",
+    trans:"Better is one's own dharma, though imperfectly performed, than the dharma of another.",
+    src:"Bhagavad Gita 3.35" },
+  { text:"मन एव मनुष्याणां कारणं बन्धमोक्षयोः।",
+    trans:"The mind alone is the cause of bondage and liberation for human beings.",
+    src:"Amritabindu Upanishad" },
+
+  // ── Hollywood / Documentary dialogs ─────────────────────────
+  { text:"In every day, there are 1,440 minutes. That means we have 1,440 daily opportunities to make a positive impact.",
+    trans:"प्रत्येक दिवसात 1,440 मिनिटे असतात. म्हणजे सकारात्मक प्रभाव पाडण्याच्या 1,440 संधी.",
+    src:"Les Brown" },
+  { text:"It does not matter how slowly you go as long as you do not stop.",
+    trans:"तुम्ही किती हळू जाता हे महत्त्वाचे नाही, जोपर्यंत थांबत नाही.",
+    src:"Confucius" },
+  { text:"The only way to do great work is to love what you do.",
+    trans:"महान काम करण्याचा एकच मार्ग आहे — जे करतो ते प्रेमाने करा.",
+    src:"Steve Jobs" },
+  { text:"You are enough. You have enough. You do enough.",
+    trans:"तुम्ही पुरेसे आहात. तुमच्याकडे पुरेसे आहे. तुम्ही पुरेसे करतो.",
+    src:"Brené Brown" },
+  { text:"Life is not measured by the number of breaths we take, but by the moments that take our breath away.",
+    trans:"आयुष्य श्वासांच्या संख्येने नाही, तर ज्या क्षणांनी श्वास अडतो त्याने मोजले जाते.",
+    src:"Maya Angelou" },
+  { text:"Do or do not. There is no try.",
+    trans:"कर किंवा करू नकोस. 'प्रयत्न' असे काही नसते.",
+    src:"Yoda, Star Wars" },
+  { text:"With great power comes great responsibility.",
+    trans:"मोठ्या शक्तीसोबत मोठी जबाबदारीही येते.",
+    src:"Spider-Man / Voltaire" },
+  { text:"Every morning you have two choices: continue to sleep with your dreams, or wake up and chase them.",
+    trans:"प्रत्येक सकाळी दोन निवडी असतात: स्वप्नांसोबत झोपत राहा, किंवा उठा आणि त्यांचा पाठलाग करा.",
+    src:"Unknown" },
+  { text:"The body achieves what the mind believes.",
+    trans:"मन जे मानते, शरीर ते साध्य करते.",
+    src:"Napoleon Hill" },
+
+  // ── Marathi proverbs & wisdom ────────────────────────────────
+  { text:"उद्योगाला लक्ष्मी साथ देते.",
+    trans:"Lakshmi accompanies those who work hard.",
+    src:"Marathi proverb" },
+  { text:"केल्याने होत आहे रे, आधी केलेची पाहिजे.",
+    trans:"It happens by doing — one must first begin.",
+    src:"Kavi Sripad Krishna Kolhatkar" },
+  { text:"मनी वसे ते स्वप्नी दिसे.",
+    trans:"What resides in the mind appears in dreams. Think big.",
+    src:"Marathi proverb" },
+  { text:"शरीर हे देवाचे मंदिर आहे, त्याची काळजी घ्या.",
+    trans:"The body is God's temple — take care of it.",
+    src:"Marathi wisdom" },
+  { text:"अपयश हे यशाची पहिली पायरी आहे.",
+    trans:"Failure is the first step to success.",
+    src:"Marathi proverb" },
+  { text:"आरोग्य हीच संपत्ती.",
+    trans:"Health is wealth.",
+    src:"Marathi proverb" },
+
+  // ── Hindi wisdom ─────────────────────────────────────────────
+  { text:"कोशिश करने वालों की कभी हार नहीं होती।",
+    trans:"Those who keep trying never lose.",
+    src:"Harivansh Rai Bachchan" },
+  { text:"जो बीत गई सो बात गई। अब का सोचो, कल का बनाओ।",
+    trans:"What's gone is gone. Think of now, build for tomorrow.",
+    src:"Hindi wisdom" },
+  { text:"मन के हारे हार है, मन के जीते जीत।",
+    trans:"If the mind loses, you lose. If the mind wins, you win.",
+    src:"Kabir Das" },
+  { text:"सवेरे जो जागे, उनके लिए सफलता दरवाजे पर होती है।",
+    trans:"For those who wake early, success stands at the door.",
+    src:"Hindi proverb" },
+
+  // ── Documentary / Science inspiration ────────────────────────
+  { text:"We are made of star-stuff. We are a way for the cosmos to know itself.",
+    trans:"आपण तारकांपासून बनलेलो आहोत. आपण ब्रह्मांडाचा स्वतःला जाणण्याचा मार्ग आहोत.",
+    src:"Carl Sagan, Cosmos" },
+  { text:"Somewhere, something incredible is waiting to be known.",
+    trans:"कुठेतरी, काहीतरी अविश्वसनीय तुम्हाला जाणून घेण्याची वाट पाहत आहे.",
+    src:"Carl Sagan" },
+  { text:"The nitrogen in our DNA, the calcium in our teeth, the iron in our blood were made in collapsing stars.",
+    trans:"आपल्या डीएनएतील नायट्रोजन, दातांतील कॅल्शियम — सारे तार्यांनी निर्माण केले.",
+    src:"Carl Sagan" },
+
+  // ── Bhagavad Gita — Shree Krishna (additional) ──────────────
+  { text:"ध्यायतो विषयान्पुंसः सङ्गस्तेषूपजायते।",
+    trans:"While contemplating sense objects, attachment is born. Control the mind — it is your greatest ally.",
+    src:"Bhagavad Gita 2.62, Shree Krishna" },
+  { text:"न त्वेवाहं जातु नासं न त्वं नेमे जनाधिपाः।",
+    trans:"Never was there a time when I did not exist, nor you, nor these kings. Nor shall any of us cease to be.",
+    src:"Bhagavad Gita 2.12, Shree Krishna" },
+  { text:"हतो वा प्राप्स्यसि स्वर्गं जित्वा वा भोक्ष्यसे महीम्।",
+    trans:"Slay and you shall win heaven. Conquer and you shall enjoy the earth. Rise up, O Arjuna, determined to fight.",
+    src:"Bhagavad Gita 2.37, Shree Krishna" },
+  { text:"सुखदुःखे समे कृत्वा लाभालाभौ जयाजयौ।",
+    trans:"Treat pleasure and pain, gain and loss, victory and defeat alike. Then engage in battle — you will not incur sin.",
+    src:"Bhagavad Gita 2.38, Shree Krishna" },
+  { text:"तस्मादसक्तः सततं कार्यं कर्म समाचर।",
+    trans:"Therefore, always perform your duty efficiently without attachment. By doing work without attachment, man attains the Supreme.",
+    src:"Bhagavad Gita 3.19, Shree Krishna" },
+  { text:"यद्यदाचरति श्रेष्ठस्तत्तदेवेतरो जनः।",
+    trans:"Whatever a great man does, others follow. Whatever standard he sets, the world follows.",
+    src:"Bhagavad Gita 3.21, Shree Krishna" },
+  { text:"क्रोधाद्भवति सम्मोहः सम्मोहात्स्मृतिविभ्रमः।",
+    trans:"From anger comes delusion; from delusion comes loss of memory; from that comes destruction of intelligence — and then ruin.",
+    src:"Bhagavad Gita 2.63, Shree Krishna" },
+
+  // ── Hollywood famous dialogs ─────────────────────────────────
+  { text:"Get busy living, or get busy dying.",
+    trans:"एकतर जगण्यात गुंतून जा, नाहीतर मरण्यात. मधला रस्ता नाही.",
+    src:"The Shawshank Redemption (1994)" },
+  { text:"After all, tomorrow is another day!",
+    trans:"शेवटी, उद्या एक नवा दिवस आहे!",
+    src:"Gone with the Wind — Scarlett O'Hara" },
+  { text:"To infinity and beyond!",
+    trans:"अनंताच्या पलीकडे आणि त्याहीपुढे!",
+    src:"Toy Story — Buzz Lightyear" },
+  { text:"Life is like a box of chocolates — you never know what you're gonna get.",
+    trans:"आयुष्य चॉकलेटच्या पेटीसारखे आहे — काय मिळेल ते कधी कळत नाही.",
+    src:"Forrest Gump (1994)" },
+  { text:"Why so serious? Let's put a smile on that face!",
+    trans:"इतके गंभीर का? त्या चेहऱ्यावर हसू आणूया!",
+    src:"The Dark Knight — The Joker" },
+  { text:"May the Force be with you.",
+    trans:"शक्ती तुमच्यासोबत असो.",
+    src:"Star Wars" },
+  { text:"You shall not pass!",
+    trans:"तुम्ही पुढे जाणार नाही! अडथळ्यांसमोर ठाम उभे राहा.",
+    src:"The Lord of the Rings — Gandalf" },
+  { text:"I am the master of my fate; I am the captain of my soul.",
+    trans:"मी माझ्या नशिबाचा स्वामी आहे; मी माझ्या आत्म्याचा नाविक आहे.",
+    src:"Invictus (W.E. Henley) — Invictus film" },
+  { text:"Every strike brings me closer to the next home run.",
+    trans:"प्रत्येक अपयश मला पुढच्या यशाच्या जवळ आणते.",
+    src:"Babe Ruth" },
+  { text:"Pain is temporary. It may last a minute, or an hour, or a day, but eventually it will subside — and something else will take its place. But if you quit, it lasts forever.",
+    trans:"वेदना तात्पुरती असते. पण हार मानली तर ती कायमची राहते.",
+    src:"Lance Armstrong" },
+
+  // ── Career & Life wisdom ──────────────────────────────────────
+  { text:"Your time is limited, so don't waste it living someone else's life.",
+    trans:"तुमचा वेळ मर्यादित आहे, तो दुसऱ्याचे आयुष्य जगण्यात वाया घालवू नका.",
+    src:"Steve Jobs, Stanford 2005" },
+  { text:"Success is not final, failure is not fatal: it is the courage to continue that counts.",
+    trans:"यश अंतिम नाही, अपयश घातक नाही: महत्त्वाची आहे ती सुरू ठेवण्याची हिम्मत.",
+    src:"Winston Churchill" },
+  { text:"The secret of getting ahead is getting started.",
+    trans:"पुढे जाण्याचे रहस्य म्हणजे सुरुवात करणे.",
+    src:"Mark Twain" },
+  { text:"Discipline is the bridge between goals and accomplishment.",
+    trans:"शिस्त हा ध्येय आणि यश यांच्यातला पूल आहे.",
+    src:"Jim Rohn" },
+  { text:"The harder I work, the luckier I get.",
+    trans:"मी जितका कठोर परिश्रम करतो, तितका मला नशीब साथ देते.",
+    src:"Samuel Goldwyn" },
+  { text:"Don't watch the clock; do what it does. Keep going.",
+    trans:"घड्याळाकडे पाहत बसू नका; त्याचे अनुकरण करा. सुरू ठेवा.",
+    src:"Sam Levenson" },
+  { text:"It always seems impossible until it's done.",
+    trans:"ते करेपर्यंत नेहमीच अशक्य वाटते.",
+    src:"Nelson Mandela" },
+
+  // ── Marathi saints & wisdom (additional) ─────────────────────
+  { text:"ज्ञानदेव म्हणे आता। सर्व सुखाचा विसावा। माझा विठ्ठलु देव जाणावा।",
+    trans:"Sant Dnyaneshwar says: know my Lord Vitthal as the resting place of all joy.",
+    src:"Sant Dnyaneshwar" },
+  { text:"तुका म्हणे असे जाले। मन माझे निवाले।",
+    trans:"Sant Tukaram says: my mind has found peace. Seek inner peace in practice.",
+    src:"Sant Tukaram" },
+  { text:"परमार्थाची माय लाज। देव आहे दावीत काज।",
+    trans:"God shows the way to those who seek the highest truth with dedication.",
+    src:"Samarth Ramdas" },
+  { text:"मना सज्जना भक्तिपंथेचि जावे।",
+    trans:"O noble mind, walk the path of devotion. That is the only true path.",
+    src:"Samarth Ramdas, Manache Shlok" },
+];
+
+function getDailyQuote() {
+  const d   = new Date();
+  const day = Math.floor((d - new Date(d.getFullYear(),0,0)) / 86400000);
+  return QUOTES[day % QUOTES.length];
+}
+
+// Compatibility aliases for older code references
+function getTodayQuote()       { return getDailyQuote(); }
+function getQuoteText(q)       {
+  const lang = cfg.pranaLang || "en";
+  if(lang==="hi" && q.trans) return q.trans;
+  if(lang==="mr" && q.trans) return q.trans;
+  return q.text;
+}
+
+function buildMotivationalMsg(goal, done) {
+  const q   = getDailyQuote();
+  const rem = Math.max(0, goal - done);
+  const lang = cfg.pranaLang || "en";
+
+  // Goal line in selected language
+  let goalLine = "";
+  if(lang === "hi")
+    goalLine = "नमस्ते वैभव! आज का लक्ष्य " + goal + " सूर्यनमस्कार है।";
+  else if(lang === "mr")
+    goalLine = "नमस्कार वैभव! आजचे लक्ष्य " + goal + " सूर्यनमस्कार आहे.";
+  else
+    goalLine = "Good morning Vaibhav! Today's target: " + goal + " Surya Namaskara.";
+
+  if(done > 0) goalLine += (lang==="mr" ? " आधीच " + done + " केले!" :
+                             lang==="hi" ? " अब तक " + done + " हो गए!" :
+                             " You've already done " + done + "!");
+
+  // Quote text — use translation if Hindi/Marathi
+  const qText = (lang === "mr" && q.trans && !q.trans.startsWith("http")) ? q.trans
+              : (lang === "hi" && q.trans && !q.trans.startsWith("http")) ? q.trans
+              : q.text;
+
+  return { goalLine, qText, src: q.src, fullText: goalLine + " " + qText };
+}
+
+// Launch alarm: sets Android alarm + opens app on trigger
+function launchAlarmAndOpen() {
+  const h = cfg.alarmHour   || 5;
+  const m = cfg.alarmMinute || 0;
+  // Set Android system alarm via intent (works in installed PWA/TWA)
+  _tryAndroidAlarm(h, m);
+  // Also use Web Notification with deep-link back to app
+  if(Notification.permission === "granted") {
+    const goal = todayGoal();
+    const q    = getDailyQuote();
+    try {
+      const n = new Notification("वैभव - सूर्यसारथी.१ॐ८", {
+        body   : "🌅 " + goal + " rounds await. " + q.text.slice(0,80) + "…",
+        icon   : "./icon-192.png",
+        badge  : "./icon-192.png",
+        tag    : "surya-daily",
+        renotify: true,
+        vibrate: [300,100,300,100,600],
+        data   : { url: "./" },
+      });
+      n.onclick = () => { window.focus(); n.close(); speakDailyMotivation(); };
+    } catch(e) {}
+  }
+}
+
+function speakDailyMotivation() {
+  const goal = todayGoal();
+  const done = todayDone();
+  const { goalLine, qText, src } = buildMotivationalMsg(goal, done);
+  // Queue: goal announcement then quote
+  setTimeout(()=>{
+    qClear();
+    qSpeak(makePranaUtt(goalLine));
+    setTimeout(()=>{ qSpeak(makePranaUtt(qText)); }, 2000);
+    setTimeout(()=>{
+      const srcUtt = makeEnUtt(src);
+      srcUtt.rate  = 0.75;
+      srcUtt.pitch = 0.9;
+      qSpeak(srcUtt);
+    }, 6000);
+  }, 600);
+}
 
 /* ── Data Recovery Scanner ─────────────────────────────────────
    Scans every possible localStorage key and shows what's found.
