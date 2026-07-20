@@ -99,14 +99,18 @@ function computeStreak() {
 function todayDoneFor(key) { return (data.history[key]||{}).sets || 0; }
 
 function todayGoal() {
-  // If a manual goal was set for today, use it
-  if(data.baseGoal > 0 && data.goalDate === todayKey())
+  const today = todayKey();
+  // Manual goal set for today
+  if(data.baseGoal > 0 && data.goalDate === today)
     return Math.min(data.baseGoal, cfg.maxSets);
-  // Use exact last goal + increase (avoids drift on non-multiples of 4)
+  // Repeat goal: yesterday was not completed — same goal today (no +4)
+  if(data.repeatGoal > 0 && data.repeatGoalDate === today)
+    return Math.min(data.repeatGoal, cfg.maxSets);
+  // Auto: last COMPLETED goal + dailyIncrease
   if(data.lastGoal > 0)
     return Math.min(data.lastGoal + cfg.dailyIncrease, cfg.maxSets);
-  // Fallback for Day 1
-  return Math.min(data.programDay * cfg.dailyIncrease, cfg.maxSets);
+  // Day 1 fallback
+  return Math.min((data.programDay||1) * cfg.dailyIncrease, cfg.maxSets);
 }
 
 function setTodayGoal(n) {
@@ -1357,6 +1361,32 @@ function startPranaPhase() {
   startPranaClocks();
 }
 
+// Speak numbers for inhale/hold/exhale counts
+function speakPranaCounts(n, word, lang) {
+  const nums = {
+    en: ["One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten",
+         "Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen"],
+    hi: ["एक","दो","तीन","चार","पाँच","छह","सात","आठ","नौ","दस",
+         "ग्यारह","बारह","तेरह","चौदह","पंद्रह","सोलह"],
+    mr: ["एक","दोन","तीन","चार","पाच","सहा","सात","आठ","नऊ","दहा",
+         "अकरा","बारा","तेरा","चौदा","पंधरा","सोळा"],
+  };
+  const numWords = nums[lang] || nums.en;
+  // Queue each count number as a separate short utterance
+  for(let i = 1; i <= n; i++) {
+    const u = makePranaUtt(numWords[i-1] || String(i));
+    u.rate  = 0.55;   // slow and deliberate for counting
+    u.pitch = 1.1;
+    qSpeak(u);
+  }
+}
+
+// Extract count from step text (looks for "4 counts", "8 counts" etc.)
+function extractCount(text) {
+  const m = text.match(/(\d+)\s*count/i);
+  return m ? parseInt(m[1]) : 0;
+}
+
 function startPranaStep() {
   if(!pranaState.active || pranaState.paused) return;
   clearPranaTimers();
@@ -1366,14 +1396,26 @@ function startPranaStep() {
   const stepIdx  = pranaState.stepIdx;
   const step     = steps[stepIdx];
   const phaseDur = pranaState.phaseDurs[pranaState.phaseIdx];
+  const lang     = cfg.pranaLang || "en";
 
   // Update UI
   document.getElementById("prana-step").textContent  = getPranaText(step);
   document.getElementById("prana-step-num").textContent =
     "Step " + (stepIdx+1) + " / " + steps.length;
 
-  // Speak the instruction
+  // 1. Speak instruction sentence first
   speakPrana(getPranaText(step));
+
+  // 2. After instruction, speak number counts if this is a counting step
+  const instrText = step.en || "";  // use English to extract count (reliable)
+  const count = extractCount(instrText);
+  if(count > 0 && step.dur > 0) {
+    // Delay count by ~2.5 sec (after instruction finishes)
+    setTimeout(()=>{
+      if(!pranaState.active || pranaState.paused) return;
+      speakPranaCounts(count, "", lang);
+    }, 2500);
+  }
 
   // If step.dur === 0 → looping step — run until phase time expires
   if(step.dur === 0) {
@@ -1704,19 +1746,47 @@ function _doGoalRollover() {
   }
 
   // Determine lastGoal for tomorrow's calculation
-  // Priority: manual baseGoal set yesterday > history record > existing lastGoal
+  // +4 only if the most recent practiced day's goal was COMPLETED
   if(data.baseGoal > 0 && data.goalDate === data.lastDate) {
-    data.lastGoal = data.baseGoal;  // manual set yesterday → use as base
+    // User manually set a goal yesterday — check if they completed it
+    const yRec = data.history[data.lastDate] || {};
+    const completed = (yRec.sets||0) >= data.baseGoal;
+    if(completed) {
+      data.lastGoal = data.baseGoal;  // completed manual goal → +4 tomorrow
+    } else {
+      data.lastGoal = data.baseGoal;  // didn't complete → keep same goal (no +4)
+      // Override: tomorrow's goal = same as today (not +4)
+      // We achieve this by NOT adding dailyIncrease in todayGoal()
+      // Set a flag: incompleteDayGoal = yesterday's goal to repeat
+      data.repeatGoal     = data.baseGoal;
+      data.repeatGoalDate = todayKey();  // today should repeat yesterday's goal
+    }
+    data.baseGoal = 0;
   } else {
-    for(let d = 1; d <= daysMissed + 1; d++) {
+    // Walk back to find most recently COMPLETED day
+    let foundCompleted = false;
+    for(let d = 1; d <= daysMissed + 2; d++) {
       const check = new Date(cur.getTime() - d * 86400000)
         .toISOString().slice(0, 10);
       const rec = data.history[check];
-      if(rec && rec.goal > 0) { data.lastGoal = rec.goal; break; }
+      if(!rec || !rec.goal) continue;
+      if((rec.sets||0) >= rec.goal) {
+        // This day was completed — use its goal as base for +4
+        data.lastGoal = rec.goal;
+        foundCompleted = true;
+        break;
+      } else {
+        // This day was NOT completed — repeat its goal (no +4)
+        data.lastGoal = rec.goal;
+        data.repeatGoal     = rec.goal;
+        data.repeatGoalDate = todayKey();
+        foundCompleted = false;
+        break;
+      }
     }
   }
 
-  // Clear manual override so today uses auto formula (lastGoal + 4)
+  // Clear manual override so today uses auto formula
   data.baseGoal      = 0;
   data.goalDate      = "";
   data.lastDate      = today;
@@ -1981,37 +2051,54 @@ function scheduleAlarm() {
   }
 }
 
-function _tryAndroidAlarm(h, m) {
-  // Sets Android system alarm. When user taps the alarm notification,
-  // it opens the app URL with ?alarm=1 which triggers morning greeting + quote.
+// ── setAndroidAlarm: called from Settings "Set Android Alarm" button ──
+// Opens the Android Clock app with the alarm pre-filled.
+// Works in Chrome on Android when app is added to Home Screen.
+function setAndroidAlarm(h, m) {
+  h = h || cfg.alarmHour   || 5;
+  m = m || cfg.alarmMinute || 0;
+
+  const label = encodeURIComponent(
+    "वैभव - सूर्यसारथी.१ॐ८ | " +
+    (h % 12 || 12) + ":" + String(m).padStart(2,"0") + (h>=12?" PM":" AM") +
+    " — Open app for today goal"
+  );
+
+  // Method 1: Android Intent URL — opens Clock app directly (works on most Android)
+  const intentUrl =
+    "intent://alarm#Intent;" +
+    "action=android.intent.action.SET_ALARM;" +
+    "extra.android.intent.extra.alarm.HOUR=" + h + ";" +
+    "extra.android.intent.extra.alarm.MINUTES=" + m + ";" +
+    "extra.android.intent.extra.alarm.MESSAGE=" + label + ";" +
+    "extra.android.intent.extra.alarm.SKIP_UI=true;" +
+    "extra.android.intent.extra.alarm.VIBRATE=true;" +
+    "end";
+
+  // Try intent URL
   try {
-    // Build the app URL that opens on alarm tap
-    const appUrl = (window.location.origin + window.location.pathname)
-                   .replace(/\/$/, "") + "/?alarm=1";
-
-    // Intent with app URL as ringtone action (opens app on dismiss)
-    const intent = "intent://alarm#Intent;" +
-      "action=android.intent.action.SET_ALARM;" +
-      "extra.android.intent.extra.alarm.HOUR=" + h + ";" +
-      "extra.android.intent.extra.alarm.MINUTES=" + m + ";" +
-      "extra.android.intent.extra.alarm.MESSAGE=" +
-        encodeURIComponent("वैभव - सूर्यसारथी.१ॐ८ — " +
-          (cfg.alarmHour||5) + ":" +
-          String(cfg.alarmMinute||0).padStart(2,"0") + " — Open app for today's goal") + ";" +
-      "extra.android.intent.extra.alarm.SKIP_UI=false;" +
-      "extra.android.intent.extra.alarm.VIBRATE=true;" +
-      "end";
-
-    const a = document.createElement("a");
-    a.href = intent;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=>{ try{document.body.removeChild(a);}catch(e){} }, 500);
-    console.log("Android alarm intent sent for", h+":"+String(m).padStart(2,"0"));
+    window.location.href = intentUrl;
+    console.log("Android alarm intent sent:", h + ":" + String(m).padStart(2,"0"));
   } catch(e) {
-    console.log("Android alarm not supported in browser mode:", e.message);
+    // Method 2: Fallback — open Clock app via generic intent
+    try {
+      window.location.href = "intent://#Intent;action=android.intent.action.MAIN;" +
+        "category=android.intent.category.LAUNCHER;" +
+        "package=com.google.android.deskclock;end";
+    } catch(e2) {
+      alert("Please open your Clock app manually and set an alarm for " +
+            (h%12||12) + ":" + String(m).padStart(2,"0") + (h>=12?" PM":" AM") +
+            "\nLabel: वैभव - सूर्यसारथी");
+    }
   }
+
+  // Schedule JS timer as backup (for when app is open near alarm time)
+  scheduleAlarm();
+}
+
+function _tryAndroidAlarm(h, m) {
+  // Internal alias — used by fireAlarm for background attempt
+  setAndroidAlarm(h, m);
 }
 
 function cancelAlarm() {
